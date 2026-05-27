@@ -8,6 +8,9 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     setupFiles: ['./tests/setup.ts'],
+    env: {
+      META_APP_SECRET: 'test-app-secret',
+    },
   },
   resolve: {
     alias: { '@': path.resolve(__dirname, '.') },
