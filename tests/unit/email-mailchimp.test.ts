@@ -10,7 +10,7 @@ beforeEach(() => {
 
 describe('MailchimpAdapter', () => {
   it('POSTs to lists/{id}/members with subscribed status', async () => {
-    const r = await new MailchimpAdapter({ apiKey: 'us1-KEY' }).subscribe({ email: 'a@b.com', igUsername: 'u', flowName: 'f', language: 'en', audienceId: 'list-1' });
+    const r = await new MailchimpAdapter({ apiKey: 'abc123def456-us1' }).subscribe({ email: 'a@b.com', igUsername: 'u', flowName: 'f', language: 'en', audienceId: 'list-1' });
     expect(r.id).toBe('mc-1');
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toMatch(/us1\.api\.mailchimp\.com\/3\.0\/lists\/list-1\/members/);

@@ -5,7 +5,8 @@ export class MailchimpAdapter implements EmailProviderAdapter {
   constructor(private opts: { apiKey: string }) {}
   async subscribe(input: { email: string; igUsername: string; flowName: string; language: 'tr' | 'en'; audienceId?: string }): Promise<{ id: string }> {
     if (!input.audienceId) throw new Error('Mailchimp requires audienceId (list_id)');
-    const dc = this.opts.apiKey.split('-')[0] ?? 'us1';
+    const parts = this.opts.apiKey.split('-');
+    const dc = parts[parts.length - 1] ?? 'us1';
     const res = await fetch(`https://${dc}.api.mailchimp.com/3.0/lists/${input.audienceId}/members`, {
       method: 'POST',
       headers: {
