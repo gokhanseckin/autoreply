@@ -10,6 +10,7 @@ export default defineConfig({
     setupFiles: ['./tests/setup.ts'],
     env: {
       META_APP_SECRET: 'test-app-secret',
+      NEXT_PUBLIC_APP_URL: 'http://localhost:3000',
     },
   },
   resolve: {
