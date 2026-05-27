@@ -8,6 +8,7 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     setupFiles: ['./tests/setup.ts'],
+    exclude: ['**/node_modules/**', '**/dist/**', 'tests/e2e/**'],
     env: {
       META_APP_SECRET: 'test-app-secret',
       NEXT_PUBLIC_APP_URL: 'http://localhost:3000',
