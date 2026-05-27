@@ -20,7 +20,7 @@ export const WaitForButtonStep = z.object({
   id: z.string(),
   type: z.literal('wait_for_button'),
   expected_payloads: z.array(z.string()),
-  on_each: z.record(z.string()),
+  on_each: z.record(z.string(), z.string()),
 });
 
 export const WaitForTextStep = z.object({
