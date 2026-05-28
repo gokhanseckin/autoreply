@@ -531,6 +531,7 @@ export type Database = {
           ig_media_id: string
           monitored: boolean
           permalink: string | null
+          posted_at: string | null
         }
         Insert: {
           caption_excerpt?: string | null
@@ -540,6 +541,7 @@ export type Database = {
           ig_media_id: string
           monitored?: boolean
           permalink?: string | null
+          posted_at?: string | null
         }
         Update: {
           caption_excerpt?: string | null
@@ -549,6 +551,7 @@ export type Database = {
           ig_media_id?: string
           monitored?: boolean
           permalink?: string | null
+          posted_at?: string | null
         }
         Relationships: [
           {

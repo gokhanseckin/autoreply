@@ -16,7 +16,7 @@ export async function syncPosts(igAccountId: string) {
   const token = await decryptSecret(decodeBytea(acc.page_access_token_enc));
   // graph.instagram.com is used because tokens are IG-Login scoped (IGAA*).
   // Endpoint shape: /me/media works with the IG user token directly.
-  const res = await fetch(`https://graph.instagram.com/v23.0/me/media?fields=id,caption,permalink&limit=25&access_token=${encodeURIComponent(token)}`);
+  const res = await fetch(`https://graph.instagram.com/v23.0/me/media?fields=id,caption,permalink,timestamp&limit=25&access_token=${encodeURIComponent(token)}`);
   const json = await res.json();
   for (const m of json.data ?? []) {
     await db.from('posts').upsert({
@@ -24,6 +24,7 @@ export async function syncPosts(igAccountId: string) {
       ig_media_id: m.id,
       caption_excerpt: (m.caption ?? '').slice(0, 140),
       permalink: m.permalink,
+      posted_at: m.timestamp ?? null,
     }, { onConflict: 'ig_media_id' });
   }
   revalidatePath('/admin/posts');
