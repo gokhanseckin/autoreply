@@ -8,7 +8,13 @@ export function StepsEditor({ flowId, initialSteps }: { flowId: string; initialS
   const [ok, setOk] = useState(false);
   async function save() {
     setErr(null); setOk(false);
-    try { await saveFlowSteps(flowId, json); setOk(true); } catch (e: any) { setErr(e.message); }
+    try {
+      const result = await saveFlowSteps(flowId, json);
+      if (result.ok) setOk(true);
+      else setErr(result.error);
+    } catch (e: any) {
+      setErr(e?.message ?? 'Unexpected error');
+    }
   }
   return (
     <div className="space-y-2">
@@ -16,9 +22,9 @@ export function StepsEditor({ flowId, initialSteps }: { flowId: string; initialS
       <textarea className="w-full h-96 font-mono text-xs border p-2" value={json} onChange={(e) => setJson(e.target.value)} />
       <div className="flex items-center gap-3">
         <button onClick={save} className="bg-black text-white px-3 py-2">Save</button>
-        {err && <span className="text-red-600 text-sm">{err}</span>}
         {ok && <span className="text-green-700 text-sm">Saved</span>}
       </div>
+      {err && <pre className="text-red-600 text-xs whitespace-pre-wrap bg-red-50 p-2 border border-red-200 rounded">{err}</pre>}
     </div>
   );
 }

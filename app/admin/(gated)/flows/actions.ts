@@ -17,8 +17,28 @@ export async function createFlow(form: FormData) {
   redirect(`/admin/flows/${data!.id}`);
 }
 
-export async function saveFlowSteps(flowId: string, stepsJson: string) {
-  const parsed = FlowStepsSchema.parse(JSON.parse(stepsJson));
+export async function saveFlowSteps(
+  flowId: string,
+  stepsJson: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(stepsJson);
+  } catch (e) {
+    return { ok: false, error: `Invalid JSON: ${(e as Error).message}` };
+  }
+  const result = FlowStepsSchema.safeParse(raw);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map((i) => `  • ${i.path.join('.')}: ${i.message}`)
+      .join('\n');
+    return { ok: false, error: `Schema validation failed:\n${issues}` };
+  }
   const db = serviceClient();
-  await db.from('flows').update({ steps: parsed, updated_at: new Date().toISOString() }).eq('id', flowId);
+  const { error } = await db
+    .from('flows')
+    .update({ steps: result.data, updated_at: new Date().toISOString() })
+    .eq('id', flowId);
+  if (error) return { ok: false, error: `DB error: ${error.message}` };
+  return { ok: true };
 }
