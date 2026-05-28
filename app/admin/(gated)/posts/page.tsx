@@ -13,7 +13,7 @@ export default async function PostsPage({ searchParams }: { searchParams: Promis
     <section className="space-y-4">
       <div className="flex items-center gap-3">
         <form>
-          <select defaultValue={accountId} className="border p-2" name="account" onChange={() => {/* uncontrolled form submit on change */}}>
+          <select defaultValue={accountId} className="border p-2" name="account">
             {accounts?.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
           </select>
           <button type="submit" className="ml-2 text-sm underline">Switch</button>
