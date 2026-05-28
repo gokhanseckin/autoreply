@@ -1,6 +1,6 @@
 'use server';
 import { serviceClient } from '@/lib/db/client';
-import { encryptSecret } from '@/lib/db/encryption';
+import { encryptSecret, encodeBytea } from '@/lib/db/encryption';
 import { revalidatePath } from 'next/cache';
 
 export async function addAccount(form: FormData) {
@@ -13,7 +13,7 @@ export async function addAccount(form: FormData) {
   const db = serviceClient();
   await db.from('ig_accounts').insert({
     name, ig_business_account_id: igBiz, fb_page_id: fbPage,
-    page_access_token_enc: Buffer.from(enc).toString('base64'),
+    page_access_token_enc: encodeBytea(enc),
     default_language: lang,
   });
   revalidatePath('/admin/accounts');

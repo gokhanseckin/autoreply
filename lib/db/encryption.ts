@@ -32,3 +32,22 @@ export async function decryptSecret(blob: Uint8Array): Promise<string> {
   const plain = sodium.crypto_secretbox_open_easy(ct, nonce, key());
   return sodium.to_string(plain);
 }
+
+/**
+ * Decode a Supabase bytea column to raw bytes.
+ * PostgREST returns bytea as `\xHEXSTRING`; legacy code paths may store base64.
+ * Accepts a Uint8Array passthrough for tests.
+ */
+export function decodeBytea(value: string | Uint8Array): Uint8Array {
+  if (value instanceof Uint8Array) return value;
+  if (typeof value === 'string') {
+    if (value.startsWith('\\x')) return new Uint8Array(Buffer.from(value.slice(2), 'hex'));
+    return new Uint8Array(Buffer.from(value, 'base64'));
+  }
+  throw new Error('decodeBytea: unsupported value');
+}
+
+/** Encode raw bytes for insertion into a Supabase bytea column via PostgREST. */
+export function encodeBytea(bytes: Uint8Array): string {
+  return '\\x' + Buffer.from(bytes).toString('hex');
+}

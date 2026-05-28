@@ -5,7 +5,7 @@ import { advance, type Effects } from '@/lib/flow-engine/machine';
 import { buildErasureSteps, ERASURE_FLOW_ID } from '@/lib/flow-engine/erasure-flow';
 import { executeErasure } from '@/lib/flow-engine/erasure-execute';
 import { findIgAccountByBusinessId, upsertContact, loadConversationState, saveConversationState, alreadyProcessed, logMessage } from '@/lib/db/queries';
-import { decryptSecret } from '@/lib/db/encryption';
+import { decryptSecret, decodeBytea } from '@/lib/db/encryption';
 import { sendButtons, sendText, sendPrivateReplyToComment } from '@/lib/meta/client';
 import { generateLinkCode } from '@/lib/links/shorten';
 import { serviceClient } from '@/lib/db/client';
@@ -29,7 +29,7 @@ function buildEffects(token: string, igAccountId: string, contactId: string): Ef
 }
 
 function decryptToken(enc: string): Promise<string> {
-  return decryptSecret(Buffer.from(enc, 'base64') as unknown as Uint8Array);
+  return decryptSecret(decodeBytea(enc));
 }
 
 export async function handleMetaWebhook(rawBody: string): Promise<{ status: number; body?: string }> {

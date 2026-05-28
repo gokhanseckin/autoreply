@@ -1,4 +1,6 @@
-const GRAPH = 'https://graph.facebook.com/v21.0';
+// Base for "Instagram API with Instagram Login" (IGAA tokens).
+// For legacy Page-based flow (EAAG tokens) use graph.facebook.com/v21.0 instead.
+const GRAPH = 'https://graph.instagram.com/v23.0';
 
 type MetaError = { code: number; type: string; message: string; fbtrace_id?: string };
 export class MetaAPIError extends Error {

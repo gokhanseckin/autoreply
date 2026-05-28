@@ -15,7 +15,11 @@ vi.mock('@/lib/flow-engine/routing', () => ({
   findCommentFlow: vi.fn().mockResolvedValue({ id: 'f1', language: 'en', steps: [{ id: 's1', type: 'send_message', text: 'Hi' }] }),
   findDmFlow: vi.fn(), findStoryReplyFlow: vi.fn(),
 }));
-vi.mock('@/lib/db/encryption', () => ({ decryptSecret: vi.fn().mockResolvedValue('TOKEN') }));
+vi.mock('@/lib/db/encryption', () => ({
+  decryptSecret: vi.fn().mockResolvedValue('TOKEN'),
+  decodeBytea: vi.fn(() => new Uint8Array(0)),
+  encodeBytea: vi.fn(() => '\\x00'),
+}));
 vi.mock('@/lib/meta/client', () => ({
   sendText: vi.fn().mockResolvedValue({ message_id: 'm' }),
   sendButtons: vi.fn().mockResolvedValue({ message_id: 'm' }),
