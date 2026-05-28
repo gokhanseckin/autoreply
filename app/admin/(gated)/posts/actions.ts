@@ -3,9 +3,12 @@ import { serviceClient } from '@/lib/db/client';
 import { decryptSecret, decodeBytea } from '@/lib/db/encryption';
 import { revalidatePath } from 'next/cache';
 
-export async function toggleMonitor(postId: string, next: boolean) {
+export async function setPostFlows(postId: string, flowIds: string[]) {
   const db = serviceClient();
-  await db.from('posts').update({ monitored: next }).eq('id', postId);
+  await db.from('flow_posts').delete().eq('post_id', postId);
+  if (flowIds.length > 0) {
+    await db.from('flow_posts').insert(flowIds.map(fid => ({ post_id: postId, flow_id: fid })));
+  }
   revalidatePath('/admin/posts');
 }
 

@@ -14,14 +14,15 @@ export function matchTriggerKeyword(text: string, keywords: string[]): string | 
 export async function findCommentFlow(args: { igAccountId: string; postId: string; commentText: string }): Promise<Flow | null> {
   const db = serviceClient();
   const { data, error } = await db
-    .from('flows')
-    .select('*')
-    .eq('ig_account_id', args.igAccountId)
-    .eq('trigger_type', 'comment')
+    .from('flow_posts')
+    .select('flows!inner(*)')
     .eq('post_id', args.postId)
-    .eq('archived', false);
+    .eq('flows.ig_account_id', args.igAccountId)
+    .eq('flows.trigger_type', 'comment')
+    .eq('flows.archived', false);
   if (error) throw error;
-  for (const f of data ?? []) {
+  for (const row of data ?? []) {
+    const f = (row as any).flows as Flow;
     if (matchTriggerKeyword(args.commentText, f.trigger_keywords)) return f;
   }
   return null;

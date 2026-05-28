@@ -298,6 +298,39 @@ export type Database = {
           },
         ]
       }
+      flow_posts: {
+        Row: {
+          created_at: string
+          flow_id: string
+          post_id: string
+        }
+        Insert: {
+          created_at?: string
+          flow_id: string
+          post_id: string
+        }
+        Update: {
+          created_at?: string
+          flow_id?: string
+          post_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "flow_posts_flow_id_fkey"
+            columns: ["flow_id"]
+            isOneToOne: false
+            referencedRelation: "flows"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "flow_posts_post_id_fkey"
+            columns: ["post_id"]
+            isOneToOne: false
+            referencedRelation: "posts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       flows: {
         Row: {
           archived: boolean
@@ -308,7 +341,6 @@ export type Database = {
           ig_account_id: string
           language: string
           name: string
-          post_id: string | null
           steps: Json
           trigger_keywords: string[]
           trigger_type: string
@@ -323,7 +355,6 @@ export type Database = {
           ig_account_id: string
           language?: string
           name: string
-          post_id?: string | null
           steps?: Json
           trigger_keywords?: string[]
           trigger_type: string
@@ -338,7 +369,6 @@ export type Database = {
           ig_account_id?: string
           language?: string
           name?: string
-          post_id?: string | null
           steps?: Json
           trigger_keywords?: string[]
           trigger_type?: string
@@ -350,13 +380,6 @@ export type Database = {
             columns: ["ig_account_id"]
             isOneToOne: false
             referencedRelation: "ig_accounts"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "flows_post_id_fkey"
-            columns: ["post_id"]
-            isOneToOne: false
-            referencedRelation: "posts"
             referencedColumns: ["id"]
           },
         ]
@@ -529,7 +552,6 @@ export type Database = {
           id: string
           ig_account_id: string
           ig_media_id: string
-          monitored: boolean
           permalink: string | null
           posted_at: string | null
         }
@@ -539,7 +561,6 @@ export type Database = {
           id?: string
           ig_account_id: string
           ig_media_id: string
-          monitored?: boolean
           permalink?: string | null
           posted_at?: string | null
         }
@@ -549,7 +570,6 @@ export type Database = {
           id?: string
           ig_account_id?: string
           ig_media_id?: string
-          monitored?: boolean
           permalink?: string | null
           posted_at?: string | null
         }
