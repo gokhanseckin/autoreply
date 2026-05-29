@@ -12,7 +12,11 @@ export async function userClient() {
       cookies: {
         getAll: () => cookieStore.getAll(),
         setAll: (toSet) => {
-          for (const { name, value, options } of toSet) cookieStore.set(name, value, options);
+          try {
+            for (const { name, value, options } of toSet) cookieStore.set(name, value, options);
+          } catch {
+            // Server Components can't set cookies; refresh happens in middleware/route handlers.
+          }
         },
       },
     },
