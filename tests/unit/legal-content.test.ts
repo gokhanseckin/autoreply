@@ -4,6 +4,8 @@ import { POLICY_TR } from '@/lib/consent/policy-content.tr';
 import { CURRENT_POLICY_VERSION } from '@/lib/consent/policy-versions';
 import { TERMS_EN } from '@/lib/consent/terms-content.en';
 import { TERMS_TR } from '@/lib/consent/terms-content.tr';
+import { DATA_DELETION_EN } from '@/lib/consent/data-deletion-content.en';
+import { DATA_DELETION_TR } from '@/lib/consent/data-deletion-content.tr';
 
 const VERSION = '2026-05-31.v1';
 
@@ -37,5 +39,17 @@ describe('terms of service content', () => {
     expect(TERMS_TR).toContain('Gokhan Seckin');
     expect(TERMS_TR).toContain('ilişkili değildir');
     expect(TERMS_TR).toContain('iyibey@gmail.com');
+  });
+});
+
+describe('data deletion content', () => {
+  it('explains the DELETE keyword and contact (EN)', () => {
+    expect(DATA_DELETION_EN).toContain('DELETE');
+    expect(DATA_DELETION_EN).toContain('iyibey@gmail.com');
+  });
+
+  it('explains the SİL keyword and contact (TR)', () => {
+    expect(DATA_DELETION_TR).toContain('SİL');
+    expect(DATA_DELETION_TR).toContain('iyibey@gmail.com');
   });
 });
