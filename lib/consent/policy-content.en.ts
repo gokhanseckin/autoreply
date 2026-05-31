@@ -1,7 +1,7 @@
 export const POLICY_EN = `
 # Privacy Policy
 
-**Data controller:** [Operator name] — contact: privacy@example.com
+**Data controller:** Gokhan Seckin — contact: iyibey@gmail.com
 
 ## What we collect
 - Instagram username and Instagram user id
@@ -24,5 +24,5 @@ We do not sell or share personal information for cross-context behavioral advert
 ## Data location
 Stored on Vercel and Supabase infrastructure. Not sold to third parties.
 
-Policy version: 2026-05-27.v1
+Policy version: 2026-05-31.v1
 `;
