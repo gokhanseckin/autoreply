@@ -1,9 +1,10 @@
 'use client';
 import { useState, useTransition } from 'react';
+import type { SyncResult } from './actions';
 
-export function SyncButton({ action }: { action: () => Promise<void> }) {
+export function SyncButton({ action }: { action: () => Promise<SyncResult> }) {
   const [isPending, startTransition] = useTransition();
-  const [justDone, setJustDone] = useState(false);
+  const [result, setResult] = useState<SyncResult | null>(null);
   return (
     <div className="flex items-center gap-2">
       <button
@@ -11,9 +12,7 @@ export function SyncButton({ action }: { action: () => Promise<void> }) {
         disabled={isPending}
         onClick={() =>
           startTransition(async () => {
-            await action();
-            setJustDone(true);
-            setTimeout(() => setJustDone(false), 2000);
+            setResult(await action());
           })
         }
         className="border rounded px-3 py-1.5 text-sm hover:bg-gray-50 disabled:opacity-50"
@@ -21,7 +20,8 @@ export function SyncButton({ action }: { action: () => Promise<void> }) {
         Sync from Meta
       </button>
       {isPending && <span className="text-sm text-gray-500">Syncing…</span>}
-      {!isPending && justDone && <span className="text-sm text-green-600">Synced!</span>}
+      {!isPending && result?.ok === true && <span className="text-sm text-green-600">Synced {result.count} post{result.count === 1 ? '' : 's'}.</span>}
+      {!isPending && result?.ok === false && <span className="text-sm text-red-600">{result.error}</span>}
     </div>
   );
 }

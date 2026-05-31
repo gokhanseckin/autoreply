@@ -12,15 +12,22 @@ export async function setPostFlows(postId: string, flowIds: string[]) {
   revalidatePath('/admin/posts');
 }
 
-export async function syncPosts(igAccountId: string) {
+export type SyncResult = { ok: true; count: number } | { ok: false; error: string };
+
+export async function syncPosts(igAccountId: string): Promise<SyncResult> {
   const db = serviceClient();
   const { data: acc } = await db.from('ig_accounts').select('*').eq('id', igAccountId).single();
-  if (!acc) return;
+  if (!acc) return { ok: false, error: 'Account not found.' };
   const token = await decryptSecret(decodeBytea(acc.page_access_token_enc));
   // graph.instagram.com is used because tokens are IG-Login scoped (IGAA*).
-  // Endpoint shape: /me/media works with the IG user token directly.
-  const res = await fetch(`https://graph.instagram.com/v23.0/me/media?fields=id,caption,permalink,timestamp&limit=25&access_token=${encodeURIComponent(token)}`);
+  const res = await fetch('https://graph.instagram.com/v23.0/me/media?fields=id,caption,permalink,timestamp&limit=25', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
   const json = await res.json();
+  if (!res.ok) {
+    return { ok: false, error: json?.error?.message ?? `Instagram returned ${res.status}` };
+  }
+  let count = 0;
   for (const m of json.data ?? []) {
     await db.from('posts').upsert({
       ig_account_id: igAccountId,
@@ -29,6 +36,8 @@ export async function syncPosts(igAccountId: string) {
       permalink: m.permalink,
       posted_at: m.timestamp ?? null,
     }, { onConflict: 'ig_media_id' });
+    count++;
   }
   revalidatePath('/admin/posts');
+  return { ok: true, count };
 }

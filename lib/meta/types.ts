@@ -1,13 +1,19 @@
 import { z } from 'zod';
 
-export const CommentChange = z.object({
-  field: z.literal('comments'),
-  value: z.object({
-    id: z.string(),
-    from: z.object({ id: z.string(), username: z.string().optional() }),
-    media: z.object({ id: z.string() }),
-    text: z.string(),
-  }),
+// The shape of a `comments` change value. Parsed lazily per-item in the handler
+// so an unrelated change field (mentions, reactions, …) in the same delivery
+// doesn't fail the whole webhook.
+export const CommentValue = z.object({
+  id: z.string(),
+  from: z.object({ id: z.string(), username: z.string().optional() }),
+  media: z.object({ id: z.string() }),
+  text: z.string(),
+});
+
+// Permissive change envelope: accept any `field`, keep `value` opaque.
+export const Change = z.object({
+  field: z.string(),
+  value: z.unknown(),
 });
 
 export const MessagingMessage = z.object({
@@ -37,7 +43,7 @@ export const MessagingMessage = z.object({
 export const MetaEntry = z.object({
   id: z.string(),
   time: z.number(),
-  changes: z.array(CommentChange).optional(),
+  changes: z.array(Change).optional(),
   messaging: z.array(MessagingMessage).optional(),
 });
 

@@ -11,19 +11,25 @@ export function matchTriggerKeyword(text: string, keywords: string[]): string | 
   return null;
 }
 
+function hasSteps(f: Flow): boolean {
+  return Array.isArray(f.steps) && f.steps.length > 0;
+}
+
 export async function findCommentFlow(args: { igAccountId: string; postId: string; commentText: string }): Promise<Flow | null> {
   const db = serviceClient();
+  // args.postId is the Instagram media id; resolve it to the internal post via the
+  // embedded `posts` relation so we never compare a uuid column to a media id.
   const { data, error } = await db
     .from('flow_posts')
-    .select('flows!inner(*)')
-    .eq('post_id', args.postId)
+    .select('flows!inner(*), posts!inner(ig_media_id)')
+    .eq('posts.ig_media_id', args.postId)
     .eq('flows.ig_account_id', args.igAccountId)
     .eq('flows.trigger_type', 'comment')
     .eq('flows.archived', false);
   if (error) throw error;
   for (const row of data ?? []) {
     const f = (row as any).flows as Flow;
-    if (matchTriggerKeyword(args.commentText, f.trigger_keywords)) return f;
+    if (hasSteps(f) && matchTriggerKeyword(args.commentText, f.trigger_keywords)) return f;
   }
   return null;
 }
@@ -38,7 +44,7 @@ export async function findDmFlow(args: { igAccountId: string; text: string }): P
     .eq('archived', false);
   if (error) throw error;
   for (const f of data ?? []) {
-    if (matchTriggerKeyword(args.text, f.trigger_keywords)) return f;
+    if (hasSteps(f) && matchTriggerKeyword(args.text, f.trigger_keywords)) return f;
   }
   return null;
 }
@@ -53,7 +59,7 @@ export async function findStoryReplyFlow(args: { igAccountId: string; text: stri
     .eq('archived', false);
   if (error) throw error;
   for (const f of data ?? []) {
-    if (matchTriggerKeyword(args.text, f.trigger_keywords)) return f;
+    if (hasSteps(f) && matchTriggerKeyword(args.text, f.trigger_keywords)) return f;
   }
   return null;
 }

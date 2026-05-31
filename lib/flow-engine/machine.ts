@@ -56,6 +56,21 @@ export async function advance(ctx: FlowContext, event: Event, effects: Effects):
 
   while (true) {
     if (step.type === 'send_message') {
+      // Re-entry after the user tapped one of this step's buttons. The postback
+      // payload encodes the chosen target (a step id, or `END_<id>` to finish),
+      // so route by the actual button pressed instead of guessing.
+      if (event.type === 'button' && step.buttons && step.buttons.length) {
+        const payload = event.payload;
+        if (payload.startsWith('END_')) {
+          return { nextStepId: null, awaitingInputType: null, expiresAt: null };
+        }
+        const target = ctx.steps.find((s) => s.id === payload);
+        if (!target) return { nextStepId: null, awaitingInputType: null, expiresAt: null };
+        step = target;
+        event = { type: 'trigger' };
+        continue;
+      }
+
       const text = appendPrivacyFooter(step.text, ctx.language);
       if (step.buttons && step.buttons.length) {
         const buttons = step.buttons.map((b) => {
@@ -64,11 +79,8 @@ export async function advance(ctx: FlowContext, event: Event, effects: Effects):
         });
         const sent = await effects.sendButtons({ token: ctx.pageAccessToken, igUserId: ctx.igUserId, text, buttons });
         await effects.logSend({ messageType: 'buttons', payload: { text, buttons }, metaMessageId: sent.message_id });
-        // Advance to the wait step pointed at by the first button (all buttons share the same wait step)
-        const firstNextId = step.buttons.find((b) => b.action.type === 'next')?.action.type === 'next'
-          ? (step.buttons.find((b) => b.action.type === 'next')!.action as { type: 'next'; next_id: string }).next_id
-          : null;
-        return { nextStepId: firstNextId ?? step.id, awaitingInputType: 'button', expiresAt };
+        // Wait on this step itself; the next button tap re-enters here and routes by payload.
+        return { nextStepId: step.id, awaitingInputType: 'button', expiresAt };
       } else {
         const sent = await effects.sendText({ token: ctx.pageAccessToken, igUserId: ctx.igUserId, text });
         await effects.logSend({ messageType: 'text', payload: { text }, metaMessageId: sent.message_id });

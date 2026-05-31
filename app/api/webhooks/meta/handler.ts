@@ -1,4 +1,4 @@
-import { MetaWebhookSchema } from '@/lib/meta/types';
+import { MetaWebhookSchema, CommentValue } from '@/lib/meta/types';
 import { matchesErasureKeyword } from '@/lib/flow-engine/reserved-keywords';
 import { findCommentFlow, findDmFlow, findStoryReplyFlow } from '@/lib/flow-engine/routing';
 import { advance, type Effects } from '@/lib/flow-engine/machine';
@@ -39,7 +39,10 @@ export async function handleMetaWebhook(rawBody: string): Promise<{ status: numb
   for (const entry of parsed.data.entry) {
     // Comments
     for (const change of entry.changes ?? []) {
-      const v = change.value;
+      if (change.field !== 'comments') continue;
+      const parsedValue = CommentValue.safeParse(change.value);
+      if (!parsedValue.success) continue;
+      const v = parsedValue.data;
       if (await alreadyProcessed(v.id)) continue;
       const account = await findIgAccountByBusinessId(entry.id);
       if (!account) continue;
