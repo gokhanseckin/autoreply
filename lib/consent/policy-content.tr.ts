@@ -1,7 +1,7 @@
 export const POLICY_TR = `
 # Gizlilik Politikası
 
-**Veri Sorumlusu:** [Operatör Adı] — iletişim: privacy@example.com
+**Veri Sorumlusu:** Gokhan Seckin — iletişim: iyibey@gmail.com
 
 ## Topladığımız Veriler
 - Instagram kullanıcı adı ve Instagram kullanıcı kimliği (IG user id)
@@ -21,5 +21,5 @@ KVKK md. 11 kapsamında verilerinize erişme, düzeltme, silme, itiraz hakkını
 ## Veri Aktarımı
 Verileriniz Vercel ve Supabase altyapısında saklanır. Üçüncü taraflara satılmaz.
 
-Politika sürümü: 2026-05-27.v1
+Politika sürümü: 2026-05-31.v1
 `;
