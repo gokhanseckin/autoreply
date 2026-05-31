@@ -15,7 +15,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? '0.0.0.0';
   const ua = req.headers.get('user-agent') ?? '';
   try {
-    const ipHash = await hashIp(ip);
+    const ipHash = hashIp(ip);
     await db.from('clicks').insert({ link_code_id: data.id, ip_hash: ipHash, user_agent: ua });
     if (!data.first_clicked_at) {
       await db.from('link_codes').update({ first_clicked_at: new Date().toISOString() }).eq('id', data.id);

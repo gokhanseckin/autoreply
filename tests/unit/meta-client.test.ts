@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { sendText, sendButtons } from '@/lib/meta/client';
+import { sendText, sendButtons, getMe } from '@/lib/meta/client';
 
 const fetchMock = vi.fn();
 
@@ -47,5 +47,30 @@ describe('sendButtons', () => {
     const body = JSON.parse(init.body);
     expect(body.message.attachment.payload.template_type).toBe('button');
     expect(body.message.attachment.payload.buttons).toHaveLength(2);
+  });
+});
+
+describe('getMe', () => {
+  it('GETs /me with a Bearer header and returns the profile', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => '{"id":"app123","user_id":"17841400000000000","username":"kenjutsudojo"}',
+    });
+    const me = await getMe('TOKEN');
+    expect(me.user_id).toBe('17841400000000000');
+    expect(me.username).toBe('kenjutsudojo');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain('/me?fields=id,user_id,username');
+    expect(init.headers.Authorization).toBe('Bearer TOKEN');
+  });
+
+  it('throws MetaAPIError on non-ok response', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      text: async () => '{"error":{"code":190,"type":"OAuthException","message":"bad token"}}',
+    });
+    await expect(getMe('BAD')).rejects.toThrow(/bad token/);
   });
 });

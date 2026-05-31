@@ -62,3 +62,20 @@ export async function sendPrivateReplyToComment(args: {
 }) {
   return call(args.pageAccessToken, `/${args.commentId}/private_replies`, { message: args.text });
 }
+
+export type MeProfile = { id: string; user_id?: string; username?: string };
+
+// Resolves the authenticated IG account's identity. `user_id` is the
+// Instagram-scoped account id that webhook deliveries carry in `entry.id`.
+export async function getMe(token: string): Promise<MeProfile> {
+  const res = await fetch(`${GRAPH}/me?fields=id,user_id,username`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    let parsed: { error?: MetaError } = {};
+    try { parsed = JSON.parse(text); } catch {}
+    throw new MetaAPIError(res.status, parsed.error ?? { code: 0, type: 'unknown', message: text });
+  }
+  return JSON.parse(text) as MeProfile;
+}

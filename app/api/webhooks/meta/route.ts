@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { createHmac } from 'node:crypto';
 import { verifyMetaSignature } from '@/lib/meta/signature';
 import { handleMetaWebhook } from './handler';
 
@@ -18,15 +17,6 @@ export async function POST(req: Request) {
   const raw = await req.text();
   const header = req.headers.get('x-hub-signature-256');
   if (!verifyMetaSignature(raw, header)) {
-    // TEMP DEBUG: log HMAC prefixes (not the secret) to diagnose mismatch.
-    const expected = process.env.META_APP_SECRET
-      ? createHmac('sha256', process.env.META_APP_SECRET).update(raw).digest('hex')
-      : '(no secret)';
-    console.error('[webhook] SIG FAIL', {
-      providedPrefix: header?.slice(0, 14) ?? '(none)',
-      expectedPrefix: 'sha256=' + expected.slice(0, 7),
-      bodyLen: raw.length,
-    });
     return new NextResponse('invalid signature', { status: 401 });
   }
   try {

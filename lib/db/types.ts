@@ -588,7 +588,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      erase_contact: {
+        Args: { p_contact_id: string; p_requested_via: string }
+        Returns: undefined
+      }
     }
     Enums: {
       [_ in never]: never
