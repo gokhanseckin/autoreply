@@ -33,13 +33,8 @@ function decryptToken(enc: string): Promise<string> {
 }
 
 export async function handleMetaWebhook(rawBody: string): Promise<{ status: number; body?: string }> {
-  console.error('[webhook] raw', rawBody.slice(0, 2000));
   const parsed = MetaWebhookSchema.safeParse(JSON.parse(rawBody));
-  if (!parsed.success) {
-    console.error('[webhook] schema fail', JSON.stringify(parsed.error.issues));
-    return { status: 200 };
-  }
-  console.error('[webhook] parsed entries:', parsed.data.entry.length);
+  if (!parsed.success) return { status: 200 };
 
   for (const entry of parsed.data.entry) {
     // Comments
@@ -68,10 +63,8 @@ export async function handleMetaWebhook(rawBody: string): Promise<{ status: numb
     // Messages and postbacks
     for (const m of entry.messaging ?? []) {
       const mid = m.message?.mid ?? m.postback?.mid ?? `${m.sender.id}:${m.timestamp}`;
-      console.error('[webhook] msg', { mid, entryId: entry.id, sender: m.sender.id, text: m.message?.text });
-      if (await alreadyProcessed(mid)) { console.error('[webhook] skip dup', mid); continue; }
+      if (await alreadyProcessed(mid)) continue;
       const account = await findIgAccountByBusinessId(entry.id);
-      console.error('[webhook] account lookup', { entryId: entry.id, found: !!account, accountId: account?.id });
       if (!account) continue;
       const contact = await upsertContact({ igAccountId: account.id, igUserId: m.sender.id });
       const token = await decryptToken(account.page_access_token_enc);
