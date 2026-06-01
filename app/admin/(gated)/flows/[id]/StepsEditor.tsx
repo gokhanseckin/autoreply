@@ -4,13 +4,13 @@ import { useState } from 'react';
 import { saveFlowBuilderSteps, saveFlowSteps } from '../actions';
 import type { FlowStep } from '@/lib/flow-engine/schema';
 import {
-  canUseGuidedBuilder,
   createChoiceStep,
   createEmailStep,
   createEndStep,
   createLinkStep,
   createMessageStep,
   nextStepId,
+  toGuidedSteps,
   type GuidedFlowStep,
 } from './flow-builder-model';
 
@@ -45,9 +45,10 @@ function defaultNextTarget(steps: GuidedFlowStep[], currentId: string) {
 }
 
 export function StepsEditor({ flowId, initialSteps }: { flowId: string; initialSteps: unknown[] }) {
-  const initialGuided = canUseGuidedBuilder(initialSteps);
+  const normalizedInitialSteps = toGuidedSteps(initialSteps);
+  const initialGuided = normalizedInitialSteps !== null;
   const [mode, setMode] = useState<Mode>(initialGuided ? 'guided' : 'advanced');
-  const [steps, setSteps] = useState<GuidedFlowStep[]>(initialGuided ? initialSteps : []);
+  const [steps, setSteps] = useState<GuidedFlowStep[]>(normalizedInitialSteps ?? []);
   const [json, setJson] = useState(JSON.stringify(initialSteps, null, 2));
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
@@ -129,11 +130,12 @@ export function StepsEditor({ flowId, initialSteps }: { flowId: string; initialS
   function showGuided() {
     try {
       const parsed = JSON.parse(json);
-      if (!Array.isArray(parsed) || !canUseGuidedBuilder(parsed)) {
+      const normalized = Array.isArray(parsed) ? toGuidedSteps(parsed) : null;
+      if (!normalized) {
         setErr('This flow uses advanced blocks. Keep editing it in JSON.');
         return;
       }
-      setSteps(parsed);
+      setSteps(normalized);
       setMode('guided');
       setErr(null);
       setOk(false);
@@ -170,7 +172,8 @@ export function StepsEditor({ flowId, initialSteps }: { flowId: string; initialS
       if (result.ok) {
         setOk(true);
         const parsed = JSON.parse(json);
-        if (Array.isArray(parsed) && canUseGuidedBuilder(parsed)) setSteps(parsed);
+        const normalized = Array.isArray(parsed) ? toGuidedSteps(parsed) : null;
+        if (normalized) setSteps(normalized);
       } else {
         setErr(result.error);
       }
