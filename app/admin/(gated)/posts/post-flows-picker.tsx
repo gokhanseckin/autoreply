@@ -1,5 +1,6 @@
 'use client';
 import { useState, useTransition } from 'react';
+import { pickerPanelClassName, pickerSummaryButtonClassName } from './post-flow-styles';
 
 type Flow = { id: string; name: string };
 
@@ -40,32 +41,31 @@ export function PostFlowsPicker({
       <button
         type="button"
         onClick={() => setOpen(v => !v)}
-        className={`px-2 py-1 text-xs border rounded ${
-          attachedFlows.length > 0 ? 'bg-green-50 border-green-300' : 'bg-gray-50'
-        }`}
+        className={pickerSummaryButtonClassName(attachedFlows.length > 0)}
       >
         {summary}
       </button>
       {open && (
-        <div className="absolute right-0 mt-1 w-64 bg-white border rounded shadow-lg z-10 p-2 space-y-1">
+        <div className={pickerPanelClassName}>
           {allFlows.length === 0 && (
-            <p className="text-xs text-gray-500 p-2">No flows for this account.</p>
+            <p className="p-2 text-xs text-neutral-500 dark:text-neutral-400">No flows for this account.</p>
           )}
           {allFlows.map(f => (
-            <label key={f.id} className="flex items-center gap-2 text-sm px-2 py-1 hover:bg-gray-50 cursor-pointer">
+            <label key={f.id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-900">
               <input
                 type="checkbox"
                 checked={selected.includes(f.id)}
                 onChange={() => toggle(f.id)}
+                className="accent-neutral-900 dark:accent-neutral-100"
               />
               <span className="truncate">{f.name}</span>
             </label>
           ))}
-          <div className="flex justify-end gap-2 pt-2 border-t">
-            <button type="button" onClick={() => { setSelected(attached); setOpen(false); }} className="text-xs px-2 py-1">
+          <div className="flex justify-end gap-2 border-t border-neutral-200 pt-2 dark:border-neutral-800">
+            <button type="button" onClick={() => { setSelected(attached); setOpen(false); }} className="rounded px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-900">
               Cancel
             </button>
-            <button type="button" onClick={save} disabled={isPending} className="text-xs px-2 py-1 bg-black text-white rounded disabled:opacity-50">
+            <button type="button" onClick={save} disabled={isPending} className="rounded bg-neutral-900 px-2 py-1 text-xs text-white disabled:bg-neutral-300 disabled:text-neutral-500 dark:bg-neutral-100 dark:text-neutral-950 dark:disabled:bg-neutral-800 dark:disabled:text-neutral-500">
               {isPending ? 'Saving…' : 'Save'}
             </button>
           </div>

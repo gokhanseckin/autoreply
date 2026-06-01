@@ -11,10 +11,10 @@ export function AccountSwitcher({
   const router = useRouter();
   return (
     <label className="flex items-center gap-2 text-sm">
-      <span className="text-gray-600">Account</span>
+      <span className="text-neutral-600 dark:text-neutral-400">Account</span>
       <select
         defaultValue={current}
-        className="border rounded px-2 py-1"
+        className="rounded border border-neutral-300 bg-white px-2 py-1 text-neutral-900 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
         onChange={e => router.push(`/admin/posts?account=${e.target.value}`)}
       >
         {accounts.map(a => (
