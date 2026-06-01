@@ -56,6 +56,25 @@ describe('advance', () => {
     expect(bye.awaitingInputType).toBeNull();
   });
 
+  it('consumes a button when its target is a wait_for_button gate', async () => {
+    const gatedSteps: FlowStep[] = [
+      {
+        id: 's1',
+        type: 'send_message',
+        text: 'Want it?',
+        buttons: [{ label: 'Yes', action: { type: 'next', next_id: 's2' } }],
+      },
+      { id: 's2', type: 'wait_for_button', expected_payloads: ['s2'], on_each: { s2: 's3' } },
+      { id: 's3', type: 'send_link', text: 'Here you go', label: 'Open', destination_url: 'https://x.test', next_id: 's4' },
+      { id: 's4', type: 'end' },
+    ];
+
+    const result = await advance(ctx({ steps: gatedSteps, currentStepId: 's1' }), { type: 'button', payload: 's2' }, effects);
+
+    expect(result.nextStepId).toBeNull();
+    expect(result.awaitingInputType).toBeNull();
+  });
+
   it('ends when an END_ payload is received', async () => {
     const result = await advance(ctx({ currentStepId: 's1' }), { type: 'button', payload: 'END_s1' }, effects);
     expect(result.nextStepId).toBeNull();

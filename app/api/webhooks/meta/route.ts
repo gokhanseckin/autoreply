@@ -16,7 +16,22 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   const raw = await req.text();
   const header = req.headers.get('x-hub-signature-256');
+  console.info('[webhook:meta]', JSON.stringify({
+    event: 'post_received',
+    hasSignature: !!header,
+    bodyLength: raw.length,
+    hasMetaAppSecret: !!process.env.META_APP_SECRET,
+    hasInstagramAppSecret: !!process.env.INSTAGRAM_APP_SECRET,
+  }));
   if (!verifyMetaSignature(raw, header)) {
+    console.error('[webhook:meta]', JSON.stringify({
+      event: 'signature_rejected',
+      hasSignature: !!header,
+      signaturePrefix: header?.slice(0, 15) ?? null,
+      bodyLength: raw.length,
+      hasMetaAppSecret: !!process.env.META_APP_SECRET,
+      hasInstagramAppSecret: !!process.env.INSTAGRAM_APP_SECRET,
+    }));
     return new NextResponse('invalid signature', { status: 401 });
   }
   try {

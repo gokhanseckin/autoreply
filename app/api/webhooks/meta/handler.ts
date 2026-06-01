@@ -1,7 +1,7 @@
 import { MetaWebhookSchema, CommentValue } from '@/lib/meta/types';
 import { matchesErasureKeyword } from '@/lib/flow-engine/reserved-keywords';
 import { findCommentFlow, findDmFlow, findStoryReplyFlow } from '@/lib/flow-engine/routing';
-import { advance, type Effects } from '@/lib/flow-engine/machine';
+import { advance, type AdvanceResult, type Effects, type Lang } from '@/lib/flow-engine/machine';
 import { buildErasureSteps, ERASURE_FLOW_ID } from '@/lib/flow-engine/erasure-flow';
 import { executeErasure } from '@/lib/flow-engine/erasure-execute';
 import { findIgAccountByBusinessId, upsertContact, loadConversationState, saveConversationState, alreadyProcessed, logMessage } from '@/lib/db/queries';
@@ -9,7 +9,12 @@ import { decryptSecret, decodeBytea } from '@/lib/db/encryption';
 import { sendButtons, sendText, sendPrivateReplyToComment } from '@/lib/meta/client';
 import { generateLinkCode } from '@/lib/links/shorten';
 import { serviceClient } from '@/lib/db/client';
-import { FlowStepsSchema } from '@/lib/flow-engine/schema';
+import { FlowStepsSchema, type FlowStep } from '@/lib/flow-engine/schema';
+import { CURRENT_POLICY_VERSION } from '@/lib/consent/policy-versions';
+import { appendPrivacyFooter } from '@/lib/consent/footer';
+import { captureEmail } from '@/lib/flow-engine/email-step';
+import type { ProviderConfig } from '@/lib/email-providers/factory';
+import type { Json } from '@/lib/db/types';
 
 function buildEffects(token: string, igAccountId: string, contactId: string): Effects {
   return {
@@ -32,42 +37,302 @@ function decryptToken(enc: string): Promise<string> {
   return decryptSecret(decodeBytea(enc));
 }
 
+function logWebhookDecision(event: string, details: Record<string, unknown> = {}) {
+  console.info('[webhook:meta]', JSON.stringify({ event, ...details }));
+}
+
+function shortId(id: string | null | undefined): string | null {
+  if (!id) return null;
+  if (id.length <= 8) return id;
+  return `${id.slice(0, 4)}...${id.slice(-4)}`;
+}
+
+function expiresIn24h(): string {
+  return new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+}
+
+function completed(): AdvanceResult {
+  return { nextStepId: null, awaitingInputType: null, expiresAt: null };
+}
+
+async function saveFlowResult(contactId: string, flowId: string, result: AdvanceResult, context: Json = {}) {
+  await saveConversationState({
+    contact_id: contactId,
+    current_flow_id: result.nextStepId ? flowId : null,
+    current_step_id: result.nextStepId,
+    awaiting_input_type: result.awaitingInputType,
+    expires_at: result.expiresAt,
+    context,
+  });
+}
+
+function providerConfigFrom(value: unknown): ProviderConfig {
+  if (!value || typeof value !== 'object') return { kind: 'none' };
+  const cfg = value as Record<string, unknown>;
+  if (cfg.kind === 'resend' && typeof cfg.api_key_enc === 'string' && typeof cfg.audience_id === 'string') {
+    return { kind: 'resend', api_key_enc: cfg.api_key_enc, audience_id: cfg.audience_id };
+  }
+  if (cfg.kind === 'mailchimp' && typeof cfg.api_key_enc === 'string' && typeof cfg.audience_id === 'string') {
+    return { kind: 'mailchimp', api_key_enc: cfg.api_key_enc, audience_id: cfg.audience_id };
+  }
+  return { kind: 'none' };
+}
+
+async function advanceFromNext(args: {
+  step: Extract<FlowStep, { type: 'collect_email' | 'send_message' }>;
+  steps: FlowStep[];
+  language: Lang;
+  contactId: string;
+  igAccountId: string;
+  flowId: string;
+  pageAccessToken: string;
+  igUserId: string;
+  effects: Effects;
+}): Promise<AdvanceResult> {
+  if (!args.step.next_id) return completed();
+  return advance(
+    {
+      steps: args.steps,
+      language: args.language,
+      currentStepId: args.step.next_id,
+      contactId: args.contactId,
+      igAccountId: args.igAccountId,
+      flowId: args.flowId,
+      pageAccessToken: args.pageAccessToken,
+      igUserId: args.igUserId,
+    },
+    { type: 'trigger' },
+    args.effects,
+  );
+}
+
+async function sendTextWithLog(args: {
+  token: string;
+  igUserId: string;
+  igAccountId: string;
+  contactId: string;
+  language: Lang;
+  text: string;
+}) {
+  const text = appendPrivacyFooter(args.text, args.language);
+  const sent = await sendText({ pageAccessToken: args.token, igUserId: args.igUserId, text });
+  await logMessage({
+    ig_account_id: args.igAccountId,
+    contact_id: args.contactId,
+    direction: 'out',
+    message_type: 'text',
+    payload: { text },
+    meta_message_id: sent.message_id,
+  });
+}
+
+async function maybeHandleEmailStep(args: {
+  state: { current_step_id: string | null; awaiting_input_type: string | null; context: unknown };
+  flow: { id: string; name: string; language: string; steps: unknown };
+  account: { id: string; email_provider_config: unknown };
+  contact: { id: string; ig_username: string | null };
+  token: string;
+  igUserId: string;
+  event: { postback?: { payload: string }; text?: string };
+  effects: Effects;
+}): Promise<boolean> {
+  const steps = FlowStepsSchema.parse(args.flow.steps);
+  const step = steps.find((s) => s.id === args.state.current_step_id);
+  if (!step || step.type !== 'collect_email') return false;
+
+  const language = args.flow.language as Lang;
+
+  if (args.event.postback?.payload === `EMAIL_AGREE_${step.id}`) {
+    const { error } = await serviceClient().from('consent_log').insert({
+      contact_id: args.contact.id,
+      consent_type: 'email_capture',
+      consent_text_version: CURRENT_POLICY_VERSION,
+    });
+    if (error) throw error;
+    await saveConversationState({
+      contact_id: args.contact.id,
+      current_flow_id: args.flow.id,
+      current_step_id: step.id,
+      awaiting_input_type: 'email',
+      expires_at: expiresIn24h(),
+      context: { email: { stepId: step.id, retries: 0 } },
+    });
+    return true;
+  }
+
+  if (args.event.postback?.payload === `EMAIL_DECLINE_${step.id}`) {
+    const result = await advanceFromNext({
+      step,
+      steps,
+      language,
+      contactId: args.contact.id,
+      igAccountId: args.account.id,
+      flowId: args.flow.id,
+      pageAccessToken: args.token,
+      igUserId: args.igUserId,
+      effects: args.effects,
+    });
+    await saveFlowResult(args.contact.id, args.flow.id, result);
+    return true;
+  }
+
+  if (args.state.awaiting_input_type !== 'email') return false;
+  if (!args.event.text) {
+    await saveConversationState({
+      contact_id: args.contact.id,
+      current_flow_id: args.flow.id,
+      current_step_id: step.id,
+      awaiting_input_type: 'email',
+      expires_at: expiresIn24h(),
+      context: args.state.context as Json,
+    });
+    return true;
+  }
+
+  const captured = await captureEmail({
+    igAccountId: args.account.id,
+    contactId: args.contact.id,
+    igUsername: args.contact.ig_username,
+    flowId: args.flow.id,
+    flowName: args.flow.name,
+    language,
+    emailText: args.event.text,
+    providerConfig: providerConfigFrom(args.account.email_provider_config),
+  });
+  await sendTextWithLog({
+    token: args.token,
+    igUserId: args.igUserId,
+    igAccountId: args.account.id,
+    contactId: args.contact.id,
+    language,
+    text: captured.message,
+  });
+
+  if (!captured.ok) {
+    const emailContext = (args.state.context && typeof args.state.context === 'object' && 'email' in args.state.context)
+      ? (args.state.context as { email?: { retries?: number } }).email
+      : undefined;
+    const retries = (emailContext?.retries ?? 0) + 1;
+    if (retries < 3) {
+      await saveConversationState({
+        contact_id: args.contact.id,
+        current_flow_id: args.flow.id,
+        current_step_id: step.id,
+        awaiting_input_type: 'email',
+        expires_at: expiresIn24h(),
+        context: { email: { stepId: step.id, retries } },
+      });
+      return true;
+    }
+  }
+
+  const result = await advanceFromNext({
+    step,
+    steps,
+    language,
+    contactId: args.contact.id,
+    igAccountId: args.account.id,
+    flowId: args.flow.id,
+    pageAccessToken: args.token,
+    igUserId: args.igUserId,
+    effects: args.effects,
+  });
+  await saveFlowResult(args.contact.id, args.flow.id, result);
+  return true;
+}
+
 export async function handleMetaWebhook(rawBody: string): Promise<{ status: number; body?: string }> {
   const parsed = MetaWebhookSchema.safeParse(JSON.parse(rawBody));
-  if (!parsed.success) return { status: 200 };
+  if (!parsed.success) {
+    logWebhookDecision('schema_rejected', { issues: parsed.error.issues.map((i) => ({ path: i.path, message: i.message })) });
+    return { status: 200 };
+  }
+  logWebhookDecision('parsed', { entries: parsed.data.entry.length });
 
   for (const entry of parsed.data.entry) {
+    logWebhookDecision('entry', {
+      entryId: shortId(entry.id),
+      changes: entry.changes?.length ?? 0,
+      messaging: entry.messaging?.length ?? 0,
+    });
+
     // Comments
     for (const change of entry.changes ?? []) {
       if (change.field !== 'comments') continue;
       const parsedValue = CommentValue.safeParse(change.value);
-      if (!parsedValue.success) continue;
+      if (!parsedValue.success) {
+        logWebhookDecision('comment_value_rejected', { entryId: shortId(entry.id) });
+        continue;
+      }
       const v = parsedValue.data;
-      if (await alreadyProcessed(v.id)) continue;
+      if (await alreadyProcessed(v.id)) {
+        logWebhookDecision('comment_duplicate', { commentId: shortId(v.id) });
+        continue;
+      }
       const account = await findIgAccountByBusinessId(entry.id);
+      logWebhookDecision('comment_account_lookup', { entryId: shortId(entry.id), found: !!account, accountId: shortId(account?.id) });
       if (!account) continue;
       const flow = await findCommentFlow({ igAccountId: account.id, postId: v.media.id, commentText: v.text });
+      logWebhookDecision('comment_flow_lookup', { mediaId: shortId(v.media.id), matched: !!flow, flowId: shortId(flow?.id) });
       if (!flow) continue;
       const contact = await upsertContact({ igAccountId: account.id, igUserId: v.from.id, igUsername: v.from.username });
       const token = await decryptToken(account.page_access_token_enc);
-      const firstStep = FlowStepsSchema.parse(flow.steps)[0];
+      const steps = FlowStepsSchema.parse(flow.steps);
+      const firstStep = steps[0];
+      let result = completed();
       if (firstStep?.type === 'send_message' && (!firstStep.buttons || firstStep.buttons.length === 0)) {
         await sendPrivateReplyToComment({ pageAccessToken: token, commentId: v.id, text: firstStep.text });
         await logMessage({ ig_account_id: account.id, contact_id: contact.id, direction: 'out', message_type: 'private_reply', payload: { text: firstStep.text }, meta_message_id: v.id });
+        result = await advanceFromNext({
+          step: firstStep,
+          steps,
+          language: flow.language as Lang,
+          contactId: contact.id,
+          igAccountId: account.id,
+          flowId: flow.id,
+          pageAccessToken: token,
+          igUserId: v.from.id,
+          effects: buildEffects(token, account.id, contact.id),
+        });
+      } else {
+        result = await advance(
+          { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: v.from.id },
+          { type: 'trigger' },
+          buildEffects(token, account.id, contact.id),
+        );
       }
-      const result = await advance(
-        { steps: FlowStepsSchema.parse(flow.steps), language: flow.language as 'tr' | 'en', currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: v.from.id },
-        { type: 'trigger' },
-        buildEffects(token, account.id, contact.id),
-      );
-      await saveConversationState({ contact_id: contact.id, current_flow_id: flow.id, current_step_id: result.nextStepId, awaiting_input_type: result.awaitingInputType, expires_at: result.expiresAt, context: {} });
+      await saveFlowResult(contact.id, flow.id, result);
     }
 
     // Messages and postbacks
     for (const m of entry.messaging ?? []) {
       const mid = m.message?.mid ?? m.postback?.mid ?? `${m.sender.id}:${m.timestamp}`;
-      if (await alreadyProcessed(mid)) continue;
+      logWebhookDecision('message_received', {
+        mid: shortId(mid),
+        entryId: shortId(entry.id),
+        senderId: shortId(m.sender.id),
+        recipientId: shortId(m.recipient.id),
+        kind: m.postback ? 'postback' : 'message',
+        hasText: !!m.message?.text,
+        textPreview: m.message?.text?.slice(0, 80) ?? null,
+        postbackPayload: m.postback?.payload ?? null,
+      });
+      if (m.sender.id === entry.id || m.sender.id === m.recipient.id) {
+        logWebhookDecision('message_ignored_echo', { mid: shortId(mid), senderId: shortId(m.sender.id) });
+        continue;
+      }
+      const hasActionableText = typeof m.message?.text === 'string' && m.message.text.trim().length > 0;
+      const hasActionablePostback = typeof m.postback?.payload === 'string' && m.postback.payload.length > 0;
+      if (!hasActionableText && !hasActionablePostback) {
+        logWebhookDecision('message_ignored_non_actionable', { mid: shortId(mid) });
+        continue;
+      }
+      if (await alreadyProcessed(mid)) {
+        logWebhookDecision('message_duplicate', { mid: shortId(mid) });
+        continue;
+      }
       const account = await findIgAccountByBusinessId(entry.id);
+      logWebhookDecision('message_account_lookup', { entryId: shortId(entry.id), found: !!account, accountId: shortId(account?.id) });
       if (!account) continue;
       const contact = await upsertContact({ igAccountId: account.id, igUserId: m.sender.id });
       const token = await decryptToken(account.page_access_token_enc);
@@ -84,6 +349,12 @@ export async function handleMetaWebhook(rawBody: string): Promise<{ status: numb
       }
 
       const state = await loadConversationState(contact.id);
+      logWebhookDecision('conversation_state', {
+        contactId: shortId(contact.id),
+        currentFlowId: shortId(state?.current_flow_id),
+        currentStepId: state?.current_step_id ?? null,
+        awaitingInputType: state?.awaiting_input_type ?? null,
+      });
       if (state?.context && (state.context as any).erasure && m.postback) {
         if (m.postback.payload === 'execute') {
           await executeErasure({ contactId: contact.id, requestedVia: 'dm' });
@@ -93,16 +364,36 @@ export async function handleMetaWebhook(rawBody: string): Promise<{ status: numb
 
       if (state?.current_flow_id) {
         const flow = await serviceClient().from('flows').select('*').eq('id', state.current_flow_id).maybeSingle();
+        logWebhookDecision('active_flow_lookup', { flowId: shortId(state.current_flow_id), found: !!flow.data });
         if (flow.data) {
+          const effects = buildEffects(token, account.id, contact.id);
+          const handledEmail = await maybeHandleEmailStep({
+            state,
+            flow: flow.data,
+            account,
+            contact,
+            token,
+            igUserId: m.sender.id,
+            event: m.postback ? { postback: m.postback } : { text: m.message?.text ?? '' },
+            effects,
+          });
+          logWebhookDecision('active_flow_email_gate', { handled: handledEmail });
+          if (handledEmail) continue;
+
           const event = m.postback
             ? { type: 'button' as const, payload: m.postback.payload }
             : { type: 'text' as const, text: m.message?.text ?? '' };
           const result = await advance(
-            { steps: FlowStepsSchema.parse(flow.data.steps), language: flow.data.language as 'tr' | 'en', currentStepId: state.current_step_id, contactId: contact.id, igAccountId: account.id, flowId: flow.data.id, pageAccessToken: token, igUserId: m.sender.id },
+            { steps: FlowStepsSchema.parse(flow.data.steps), language: flow.data.language as Lang, currentStepId: state.current_step_id, contactId: contact.id, igAccountId: account.id, flowId: flow.data.id, pageAccessToken: token, igUserId: m.sender.id },
             event,
-            buildEffects(token, account.id, contact.id),
+            effects,
           );
-          await saveConversationState({ contact_id: contact.id, current_flow_id: result.nextStepId ? flow.data.id : null, current_step_id: result.nextStepId, awaiting_input_type: result.awaitingInputType, expires_at: result.expiresAt, context: {} });
+          await saveFlowResult(contact.id, flow.data.id, result);
+          logWebhookDecision('active_flow_advanced', {
+            flowId: shortId(flow.data.id),
+            nextStepId: result.nextStepId,
+            awaitingInputType: result.awaitingInputType,
+          });
           continue;
         }
       }
@@ -113,13 +404,23 @@ export async function handleMetaWebhook(rawBody: string): Promise<{ status: numb
       } else if (m.message?.text) {
         flow = await findDmFlow({ igAccountId: account.id, text: m.message.text });
       }
+      logWebhookDecision('new_flow_lookup', {
+        triggerType: m.message?.reply_to?.story ? 'story_reply' : m.message?.text ? 'dm' : 'none',
+        matched: !!flow,
+        flowId: shortId(flow?.id),
+      });
       if (!flow) continue;
       const result = await advance(
-        { steps: FlowStepsSchema.parse(flow.steps), language: flow.language as 'tr' | 'en', currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: m.sender.id },
+        { steps: FlowStepsSchema.parse(flow.steps), language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: m.sender.id },
         { type: 'trigger' },
         buildEffects(token, account.id, contact.id),
       );
-      await saveConversationState({ contact_id: contact.id, current_flow_id: flow.id, current_step_id: result.nextStepId, awaiting_input_type: result.awaitingInputType, expires_at: result.expiresAt, context: {} });
+      await saveFlowResult(contact.id, flow.id, result);
+      logWebhookDecision('new_flow_advanced', {
+        flowId: shortId(flow.id),
+        nextStepId: result.nextStepId,
+        awaitingInputType: result.awaitingInputType,
+      });
     }
   }
 

@@ -1,7 +1,10 @@
 'use server';
 import { serviceClient } from '@/lib/db/client';
 import { redirect } from 'next/navigation';
+import { revalidatePath } from 'next/cache';
 import { FlowStepsSchema } from '@/lib/flow-engine/schema';
+
+const LANGUAGES = new Set(['tr', 'en']);
 
 export async function createFlow(form: FormData) {
   const db = serviceClient();
@@ -41,4 +44,21 @@ export async function saveFlowSteps(
     .eq('id', flowId);
   if (error) return { ok: false, error: `DB error: ${error.message}` };
   return { ok: true };
+}
+
+export async function saveFlowSettings(flowId: string, form: FormData) {
+  const language = String(form.get('language'));
+  if (!LANGUAGES.has(language)) {
+    throw new Error('Unsupported flow language');
+  }
+
+  const db = serviceClient();
+  const { error } = await db
+    .from('flows')
+    .update({ language, updated_at: new Date().toISOString() })
+    .eq('id', flowId);
+  if (error) throw error;
+
+  revalidatePath('/admin/flows');
+  revalidatePath(`/admin/flows/${flowId}`);
 }

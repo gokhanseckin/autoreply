@@ -67,7 +67,9 @@ export async function advance(ctx: FlowContext, event: Event, effects: Effects):
         const target = ctx.steps.find((s) => s.id === payload);
         if (!target) return { nextStepId: null, awaitingInputType: null, expiresAt: null };
         step = target;
-        event = { type: 'trigger' };
+        if (target.type !== 'wait_for_button' || !target.expected_payloads.includes(payload)) {
+          event = { type: 'trigger' };
+        }
         continue;
       }
 
