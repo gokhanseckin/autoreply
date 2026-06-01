@@ -81,7 +81,25 @@ export async function findStoryReplyFlow(args: { igAccountId: string; text: stri
     .eq('archived', false);
   if (error) throw error;
   for (const f of data ?? []) {
-    if (hasSteps(f) && matchTriggerKeyword(args.text, f.trigger_keywords)) return f;
+    const matchedKeyword = matchTriggerKeyword(args.text, f.trigger_keywords);
+    console.info('[routing:story_reply]', JSON.stringify({
+      igAccountId: shortId(args.igAccountId),
+      flowId: shortId(f.id),
+      archived: f.archived,
+      keywords: f.trigger_keywords,
+      hasSteps: hasSteps(f),
+      matchedKeyword,
+      textPreview: args.text.slice(0, 80),
+      scope: 'account',
+    }));
+    if (hasSteps(f) && matchedKeyword) return f;
   }
+  console.info('[routing:story_reply]', JSON.stringify({
+    igAccountId: shortId(args.igAccountId),
+    candidateCount: data?.length ?? 0,
+    result: 'no_match',
+    scope: 'account',
+    textPreview: args.text.slice(0, 80),
+  }));
   return null;
 }

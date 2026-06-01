@@ -3,6 +3,7 @@ import { setPostFlows, syncPosts } from './actions';
 import { AccountSwitcher } from './account-switcher';
 import { SyncButton } from './sync-button';
 import { PostFlowsPicker } from './post-flows-picker';
+import { isPostAttachableFlow } from './flow-candidates';
 
 export default async function PostsPage({ searchParams }: { searchParams: Promise<{ account?: string }> }) {
   const sp = await searchParams;
@@ -22,11 +23,13 @@ export default async function PostsPage({ searchParams }: { searchParams: Promis
         .select('id,name,trigger_type,trigger_keywords,archived,flow_posts(post_id)')
         .eq('ig_account_id', accountId)
         .eq('archived', false)
+        .eq('trigger_type', 'comment')
         .order('updated_at', { ascending: false })
     : { data: [] };
 
-  const flowsForPicker = (flows ?? []).map(f => ({ id: f.id, name: f.name }));
-  const campaigns = (flows ?? []).filter(f => Array.isArray(f.flow_posts) && f.flow_posts.length > 0);
+  const attachableFlows = (flows ?? []).filter(isPostAttachableFlow);
+  const flowsForPicker = attachableFlows.map(f => ({ id: f.id, name: f.name }));
+  const campaigns = attachableFlows.filter(f => Array.isArray(f.flow_posts) && f.flow_posts.length > 0);
 
   const fmtDate = (iso: string) => {
     const d = new Date(iso);

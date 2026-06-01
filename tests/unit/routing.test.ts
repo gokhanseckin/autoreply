@@ -15,7 +15,7 @@ vi.mock('@/lib/db/client', () => ({
   },
 }));
 
-import { matchTriggerKeyword, findCommentFlow, findDmFlow } from '@/lib/flow-engine/routing';
+import { matchTriggerKeyword, findCommentFlow, findDmFlow, findStoryReplyFlow } from '@/lib/flow-engine/routing';
 
 const step = { id: 's1', type: 'send_message', text: 'hi' };
 
@@ -59,5 +59,26 @@ describe('findDmFlow', () => {
   it('returns a configured flow on match', async () => {
     result = { data: [{ id: 'f1', trigger_keywords: ['hi'], steps: [step] }], error: null };
     expect((await findDmFlow({ igAccountId: 'a1', text: 'hi there' }))?.id).toBe('f1');
+  });
+});
+
+describe('findStoryReplyFlow', () => {
+  it('matches a keyword globally for any story reply on the account', async () => {
+    result = { data: [{ id: 'story-flow', trigger_keywords: ['reply'], steps: [step] }], error: null };
+
+    const flow = await findStoryReplyFlow({ igAccountId: 'a1', text: 'story reply please' });
+
+    expect(flow?.id).toBe('story-flow');
+    expect(calls.table).toBe('flows');
+    expect(calls.eq).toContainEqual(['ig_account_id', 'a1']);
+    expect(calls.eq).toContainEqual(['trigger_type', 'story_reply']);
+    expect(calls.eq).toContainEqual(['archived', false]);
+    expect(calls.eq.some(([col]) => String(col).includes('post'))).toBe(false);
+  });
+
+  it('skips a keyword-matching story flow that has no steps', async () => {
+    result = { data: [{ id: 'story-flow', trigger_keywords: ['reply'], steps: [] }], error: null };
+
+    expect(await findStoryReplyFlow({ igAccountId: 'a1', text: 'reply' })).toBeNull();
   });
 });
