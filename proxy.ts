@@ -12,7 +12,7 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(authRedirectUrl);
   }
 
-  if (!request.nextUrl.pathname.startsWith('/admin')) {
+  if (!request.nextUrl.pathname.startsWith('/admin') || request.nextUrl.pathname === '/admin/sign-in') {
     return NextResponse.next();
   }
 
