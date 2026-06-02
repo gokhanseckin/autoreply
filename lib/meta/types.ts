@@ -9,7 +9,7 @@ import { z } from 'zod';
 // comment — which we route to the account's story-reply flows.
 export const CommentValue = z.object({
   id: z.string(),
-  from: z.object({ id: z.string(), username: z.string().optional() }),
+  from: z.object({ id: z.string().optional(), username: z.string().optional() }),
   media: z.object({ id: z.string(), media_product_type: z.string().optional() }),
   text: z.string(),
 });
@@ -51,6 +51,8 @@ export const MessagingMessage = z.object({
 export const MetaEntry = z.object({
   id: z.string(),
   time: z.number(),
+  field: z.string().optional(),
+  value: z.unknown().optional(),
   changes: z.array(Change).optional(),
   messaging: z.array(MessagingMessage).optional(),
 });

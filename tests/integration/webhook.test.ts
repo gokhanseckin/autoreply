@@ -116,6 +116,56 @@ describe('POST /api/webhooks/meta', () => {
     expect(sendPrivateReplyToComment).not.toHaveBeenCalled();
   });
 
+  it('runs a direct-entry story comment payload through the story-reply flow', async () => {
+    vi.mocked(findStoryReplyFlow).mockResolvedValue({ id: 'story-flow', language: 'en', steps: [{ id: 's1', type: 'send_message', text: 'Story comment matched' }] } as any);
+    const directStoryComment = {
+      object: 'instagram',
+      entry: [{
+        id: '17841400000000000',
+        time: 1748372160,
+        field: 'comments',
+        value: {
+          id: '18000000000000001',
+          from: { id: '8800000000000000', username: 'test_user' },
+          media: { id: '17900000000000000', media_product_type: 'STORY' },
+          text: 'reply',
+        },
+      }],
+    };
+
+    const res = await POST(signed(JSON.stringify(directStoryComment)));
+
+    expect(res.status).toBe(200);
+    expect(findStoryReplyFlow).toHaveBeenCalledWith({ igAccountId: 'a1', text: 'reply' });
+    const { sendText } = await import('@/lib/meta/client');
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ commentId: '18000000000000001' }));
+  });
+
+  it('accepts direct-entry story comments when Meta omits the commenter id', async () => {
+    vi.mocked(findStoryReplyFlow).mockResolvedValue({ id: 'story-flow', language: 'en', steps: [{ id: 's1', type: 'send_message', text: 'Story comment matched' }] } as any);
+    const directStoryComment = {
+      object: 'instagram',
+      entry: [{
+        id: '17841400000000000',
+        time: 1748372160,
+        field: 'comments',
+        value: {
+          id: '18000000000000002',
+          from: { username: 'test_user' },
+          media: { id: '17900000000000000', media_product_type: 'STORY' },
+          text: 'reply',
+        },
+      }],
+    };
+
+    const res = await POST(signed(JSON.stringify(directStoryComment)));
+
+    expect(res.status).toBe(200);
+    expect(findStoryReplyFlow).toHaveBeenCalledWith({ igAccountId: 'a1', text: 'reply' });
+    const { sendText } = await import('@/lib/meta/client');
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ commentId: '18000000000000002' }));
+  });
+
   it('starts a DM flow and clears state when the first step ends the flow', async () => {
     vi.mocked(findDmFlow).mockResolvedValue({ id: 'dm-flow', language: 'en', steps: [{ id: 'dm1', type: 'send_message', text: 'Welcome' }] } as any);
 

@@ -47,6 +47,11 @@ function shortId(id: string | null | undefined): string | null {
   return `${id.slice(0, 4)}...${id.slice(-4)}`;
 }
 
+function entryChanges(entry: { field?: string; value?: unknown; changes?: Array<{ field: string; value: unknown }> }) {
+  const direct = entry.field ? [{ field: entry.field, value: entry.value }] : [];
+  return [...direct, ...(entry.changes ?? [])];
+}
+
 function expiresIn24h(): string {
   return new Date(Date.now() + 24 * 3600 * 1000).toISOString();
 }
@@ -254,12 +259,13 @@ export async function handleMetaWebhook(rawBody: string): Promise<{ status: numb
   for (const entry of parsed.data.entry) {
     logWebhookDecision('entry', {
       entryId: shortId(entry.id),
+      directField: entry.field ?? null,
       changes: entry.changes?.length ?? 0,
       messaging: entry.messaging?.length ?? 0,
     });
 
     // Comments
-    for (const change of entry.changes ?? []) {
+    for (const change of entryChanges(entry)) {
       // Log the field of every change so a story comment delivered under an
       // unexpected field name is visible instead of silently skipped.
       logWebhookDecision('change_field', { entryId: shortId(entry.id), field: change.field });
@@ -301,7 +307,8 @@ export async function handleMetaWebhook(rawBody: string): Promise<{ status: numb
         flowId: shortId(flow?.id),
       });
       if (!flow) continue;
-      const contact = await upsertContact({ igAccountId: account.id, igUserId: v.from.id, igUsername: v.from.username });
+      const commenterId = v.from.id ?? `comment:${v.id}`;
+      const contact = await upsertContact({ igAccountId: account.id, igUserId: commenterId, igUsername: v.from.username });
       const token = await decryptToken(account.page_access_token_enc);
       const steps = FlowStepsSchema.parse(flow.steps);
       let result = completed();
@@ -311,7 +318,7 @@ export async function handleMetaWebhook(rawBody: string): Promise<{ status: numb
         // the comment so Instagram delivers it to the user's inbox; buttons,
         // links and footer-on-first all behave exactly like a story reply.
         result = await advance(
-          { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: v.from.id, appendFooter: true, replyToCommentId: v.id },
+          { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: commenterId, appendFooter: true, replyToCommentId: v.id },
           { type: 'trigger' },
           buildEffects(token, account.id, contact.id),
         );
@@ -331,12 +338,12 @@ export async function handleMetaWebhook(rawBody: string): Promise<{ status: numb
             igAccountId: account.id,
             flowId: flow.id,
             pageAccessToken: token,
-            igUserId: v.from.id,
+            igUserId: commenterId,
             effects: buildEffects(token, account.id, contact.id),
           });
         } else {
           result = await advance(
-            { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: v.from.id, appendFooter: true },
+            { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: commenterId, appendFooter: true },
             { type: 'trigger' },
             buildEffects(token, account.id, contact.id),
           );

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { serviceClient } from '@/lib/db/client';
 import { setFlowArchived } from './actions';
+import { languageLabel, triggerLabel } from './flow-labels';
 
 export default async function FlowsPage({ searchParams }: { searchParams: Promise<{ status?: string }> }) {
   const sp = await searchParams;
@@ -35,8 +36,8 @@ export default async function FlowsPage({ searchParams }: { searchParams: Promis
               </Link>
               <div className="mt-1 flex flex-wrap gap-2 text-xs text-gray-500">
                 {f.ig_accounts?.name && <span>@{f.ig_accounts.name}</span>}
-                <span>{f.trigger_type}</span>
-                <span>{f.language}</span>
+                <span>{triggerLabel(f.trigger_type)}</span>
+                <span>{languageLabel(f.language)}</span>
                 {f.archived && <span>archived</span>}
               </div>
             </div>

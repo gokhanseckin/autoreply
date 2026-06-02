@@ -22,7 +22,7 @@ export default async function NewFlow() {
         </label>
         <label className="grid gap-1 text-sm">
           <span className="text-xs font-medium text-gray-500">Trigger</span>
-          <select name="trigger_type" className="w-full border p-2"><option value="comment">Post comment</option><option value="dm">DM keyword</option><option value="story_reply">Story reply - any story</option></select>
+          <select name="trigger_type" className="w-full border p-2"><option value="comment">Post comment</option><option value="dm">DM keyword</option><option value="story_reply">Story reply / comment - any story</option></select>
         </label>
       </div>
       <label className="grid gap-1 text-sm">
