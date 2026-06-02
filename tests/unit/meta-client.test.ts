@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { sendText, sendButtons, getMe } from '@/lib/meta/client';
+import { sendText, sendButtons, getMe, subscribeToAppWebhooks } from '@/lib/meta/client';
 
 const fetchMock = vi.fn();
 
@@ -97,5 +97,30 @@ describe('getMe', () => {
       text: async () => '{"error":{"code":190,"type":"OAuthException","message":"bad token"}}',
     });
     await expect(getMe('BAD')).rejects.toThrow(/bad token/);
+  });
+});
+
+describe('subscribeToAppWebhooks', () => {
+  it('POSTs the Instagram account subscription with comments and messaging fields', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => '{"success":true}',
+    });
+
+    const result = await subscribeToAppWebhooks('TOKEN');
+
+    expect(result).toEqual({ success: true });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain('/me/subscribed_apps?');
+    expect(String(url)).toContain('access_token=TOKEN');
+    const parsed = new URL(String(url));
+    expect(parsed.searchParams.get('subscribed_fields')?.split(',')).toEqual([
+      'comments',
+      'messages',
+      'messaging_postbacks',
+      'message_reactions',
+    ]);
+    expect(init.method).toBe('POST');
   });
 });

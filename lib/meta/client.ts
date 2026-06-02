@@ -75,6 +75,14 @@ export async function sendPrivateReplyToComment(args: {
 }
 
 export type MeProfile = { id: string; user_id?: string; username?: string };
+export type WebhookSubscriptionResponse = { success: boolean };
+
+export const WEBHOOK_SUBSCRIBED_FIELDS = [
+  'comments',
+  'messages',
+  'messaging_postbacks',
+  'message_reactions',
+] as const;
 
 // Resolves the authenticated IG account's identity. `user_id` is the
 // Instagram-scoped account id that webhook deliveries carry in `entry.id`.
@@ -89,4 +97,19 @@ export async function getMe(token: string): Promise<MeProfile> {
     throw new MetaAPIError(res.status, parsed.error ?? { code: 0, type: 'unknown', message: text });
   }
   return JSON.parse(text) as MeProfile;
+}
+
+export async function subscribeToAppWebhooks(token: string): Promise<WebhookSubscriptionResponse> {
+  const fields = WEBHOOK_SUBSCRIBED_FIELDS.join(',');
+  const res = await fetch(
+    `${GRAPH}/me/subscribed_apps?subscribed_fields=${encodeURIComponent(fields)}&access_token=${encodeURIComponent(token)}`,
+    { method: 'POST' },
+  );
+  const text = await res.text();
+  if (!res.ok) {
+    let parsed: { error?: MetaError } = {};
+    try { parsed = JSON.parse(text); } catch {}
+    throw new MetaAPIError(res.status, parsed.error ?? { code: 0, type: 'unknown', message: text });
+  }
+  return JSON.parse(text) as WebhookSubscriptionResponse;
 }
