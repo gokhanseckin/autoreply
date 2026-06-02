@@ -32,6 +32,17 @@ describe('sendText', () => {
   });
 });
 
+describe('sendText', () => {
+  it('addresses the comment (no messaging_type) when commentId is given', async () => {
+    await sendText({ pageAccessToken: 'TOKEN', commentId: 'CMT_1', text: 'hi' });
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body);
+    expect(body.recipient).toEqual({ comment_id: 'CMT_1' });
+    expect(body.message).toEqual({ text: 'hi' });
+    expect(body.messaging_type).toBeUndefined();
+  });
+});
+
 describe('sendButtons', () => {
   it('POSTs button_template with up to 3 buttons', async () => {
     await sendButtons({
@@ -47,6 +58,20 @@ describe('sendButtons', () => {
     const body = JSON.parse(init.body);
     expect(body.message.attachment.payload.template_type).toBe('button');
     expect(body.message.attachment.payload.buttons).toHaveLength(2);
+  });
+
+  it('carries buttons on a comment-addressed opener (recipient.comment_id, no messaging_type)', async () => {
+    await sendButtons({
+      pageAccessToken: 'TOKEN',
+      commentId: 'CMT_1',
+      text: 'Want the free thing?',
+      buttons: [{ type: 'postback', title: 'Yes', payload: 'YES' }],
+    });
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body);
+    expect(body.recipient).toEqual({ comment_id: 'CMT_1' });
+    expect(body.message.attachment.payload.buttons).toHaveLength(1);
+    expect(body.messaging_type).toBeUndefined();
   });
 });
 

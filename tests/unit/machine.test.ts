@@ -133,3 +133,38 @@ describe('advance footer policy', () => {
     expect(sent).toEqual([{ kind: 'text', text: 'just text' }]);
   });
 });
+
+describe('advance comment opener', () => {
+  it('addresses only the first message to the comment id, then the user', async () => {
+    const seen: { commentId?: string; igUserId: string }[] = [];
+    const fx: Effects = {
+      sendText: async ({ commentId, igUserId }) => { seen.push({ commentId, igUserId }); return { message_id: 'm' }; },
+      sendButtons: async ({ commentId, igUserId }) => { seen.push({ commentId, igUserId }); return { message_id: 'm' }; },
+      recordLink: async () => 'CODE',
+      logSend: async () => {},
+    };
+    const twoMsg: FlowStep[] = [
+      { id: 's1', type: 'send_message', text: 'first', next_id: 's2' },
+      { id: 's2', type: 'send_message', text: 'second' },
+    ];
+    await advance(ctx({ steps: twoMsg, igUserId: 'u1', replyToCommentId: 'CMT' }), { type: 'trigger' }, fx);
+    expect(seen[0].commentId).toBe('CMT');
+    expect(seen[1].commentId).toBeUndefined();
+    expect(seen[1].igUserId).toBe('u1');
+  });
+
+  it('carries buttons on the comment-addressed opener', async () => {
+    const seen: { kind: string; commentId?: string }[] = [];
+    const fx: Effects = {
+      sendText: async ({ commentId }) => { seen.push({ kind: 'text', commentId }); return { message_id: 'm' }; },
+      sendButtons: async ({ commentId }) => { seen.push({ kind: 'buttons', commentId }); return { message_id: 'm' }; },
+      recordLink: async () => 'CODE',
+      logSend: async () => {},
+    };
+    const choiceFirst: FlowStep[] = [
+      { id: 's1', type: 'send_message', text: 'Want the free thing?', buttons: [{ label: 'Yes', action: { type: 'end' } }] },
+    ];
+    await advance(ctx({ steps: choiceFirst, igUserId: 'u1', replyToCommentId: 'CMT' }), { type: 'trigger' }, fx);
+    expect(seen[0]).toEqual({ kind: 'buttons', commentId: 'CMT' });
+  });
+});

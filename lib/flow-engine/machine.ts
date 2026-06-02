@@ -19,6 +19,10 @@ export type FlowContext = {
   // non-plain message this run sends; later messages stay clean. Continuations
   // of an already-started conversation pass false so replies look natural.
   appendFooter?: boolean;
+  // Set when the trigger was a public comment (e.g. a story comment): the very
+  // first outbound message is addressed to the comment so Instagram opens the
+  // DM thread. Subsequent messages go to the user normally. Buttons still work.
+  replyToCommentId?: string;
 };
 
 export type Event =
@@ -27,8 +31,8 @@ export type Event =
   | { type: 'text'; text: string };
 
 export type Effects = {
-  sendText: (args: { token: string; igUserId: string; text: string }) => Promise<{ message_id: string }>;
-  sendButtons: (args: { token: string; igUserId: string; text: string; buttons: { type: 'postback' | 'web_url'; title: string; payload?: string; url?: string }[] }) => Promise<{ message_id: string }>;
+  sendText: (args: { token: string; igUserId: string; text: string; commentId?: string }) => Promise<{ message_id: string }>;
+  sendButtons: (args: { token: string; igUserId: string; text: string; buttons: { type: 'postback' | 'web_url'; title: string; payload?: string; url?: string }[]; commentId?: string }) => Promise<{ message_id: string }>;
   recordLink: (args: { flowId: string; stepId: string; label: string; destinationUrl: string; contactId: string }) => Promise<string>;
   logSend: (args: { messageType: string; payload: unknown; metaMessageId: string }) => Promise<void>;
 };
@@ -68,6 +72,15 @@ export async function advance(ctx: FlowContext, event: Event, effects: Effects):
     return body;
   };
 
+  // Only the first message addresses the comment (to open the DM); the rest go
+  // to the user. consumeCommentId() returns it once, then undefined thereafter.
+  let pendingCommentId = ctx.replyToCommentId;
+  const consumeCommentId = (): string | undefined => {
+    const id = pendingCommentId;
+    pendingCommentId = undefined;
+    return id;
+  };
+
   while (true) {
     if (step.type === 'send_message') {
       // Re-entry after the user tapped one of this step's buttons. The postback
@@ -94,13 +107,13 @@ export async function advance(ctx: FlowContext, event: Event, effects: Effects):
           if (b.action.type === 'url') return { type: 'web_url' as const, title: b.label, url: b.action.url };
           return { type: 'postback' as const, title: b.label, payload: b.action.type === 'next' ? b.action.next_id : `END_${step.id}` };
         });
-        const sent = await effects.sendButtons({ token: ctx.pageAccessToken, igUserId: ctx.igUserId, text, buttons });
+        const sent = await effects.sendButtons({ token: ctx.pageAccessToken, igUserId: ctx.igUserId, text, buttons, commentId: consumeCommentId() });
         await effects.logSend({ messageType: 'buttons', payload: { text, buttons }, metaMessageId: sent.message_id });
         // Wait on this step itself; the next button tap re-enters here and routes by payload.
         return { nextStepId: step.id, awaitingInputType: 'button', expiresAt };
       } else {
         const text = step.plain ? step.text : withFooter(step.text);
-        const sent = await effects.sendText({ token: ctx.pageAccessToken, igUserId: ctx.igUserId, text });
+        const sent = await effects.sendText({ token: ctx.pageAccessToken, igUserId: ctx.igUserId, text, commentId: consumeCommentId() });
         await effects.logSend({ messageType: 'text', payload: { text, plain: step.plain ?? false }, metaMessageId: sent.message_id });
         if (step.next_id) { step = findStep(ctx, step.next_id); continue; }
         return { nextStepId: null, awaitingInputType: null, expiresAt };
@@ -111,7 +124,7 @@ export async function advance(ctx: FlowContext, event: Event, effects: Effects):
       const code = await effects.recordLink({ flowId: ctx.flowId, stepId: step.id, label: step.label, destinationUrl: step.destination_url, contactId: ctx.contactId });
       const url = `${baseUrl}/r/${code}`;
       const text = withFooter(step.text);
-      const sent = await effects.sendButtons({ token: ctx.pageAccessToken, igUserId: ctx.igUserId, text, buttons: [{ type: 'web_url', title: step.label, url }] });
+      const sent = await effects.sendButtons({ token: ctx.pageAccessToken, igUserId: ctx.igUserId, text, buttons: [{ type: 'web_url', title: step.label, url }], commentId: consumeCommentId() });
       await effects.logSend({ messageType: 'buttons', payload: { text, link_code: code, destination: step.destination_url }, metaMessageId: sent.message_id });
       if (step.next_id) { step = findStep(ctx, step.next_id); continue; }
       return { nextStepId: null, awaitingInputType: null, expiresAt };
@@ -148,6 +161,7 @@ export async function advance(ctx: FlowContext, event: Event, effects: Effects):
           { type: 'postback', title: ct.agree, payload: `EMAIL_AGREE_${step.id}` },
           { type: 'postback', title: ct.decline, payload: `EMAIL_DECLINE_${step.id}` },
         ],
+        commentId: consumeCommentId(),
       });
       await effects.logSend({ messageType: 'buttons', payload: { stage: 'email_consent', step: step.id, policy_version: CURRENT_POLICY_VERSION }, metaMessageId: sent.message_id });
       return { nextStepId: step.id, awaitingInputType: 'button', expiresAt };

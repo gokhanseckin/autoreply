@@ -18,8 +18,8 @@ import type { Json } from '@/lib/db/types';
 
 function buildEffects(token: string, igAccountId: string, contactId: string): Effects {
   return {
-    sendText: ({ token: t, igUserId, text }) => sendText({ pageAccessToken: t, igUserId, text }),
-    sendButtons: ({ token: t, igUserId, text, buttons }) => sendButtons({ pageAccessToken: t, igUserId, text, buttons: buttons as any }),
+    sendText: ({ token: t, igUserId, text, commentId }) => sendText({ pageAccessToken: t, igUserId, text, commentId }),
+    sendButtons: ({ token: t, igUserId, text, buttons, commentId }) => sendButtons({ pageAccessToken: t, igUserId, text, buttons: buttons as any, commentId }),
     recordLink: async ({ flowId, stepId, label, destinationUrl, contactId: c }) => {
       const db = serviceClient();
       const { data: link } = await db.from('links').insert({ flow_id: flowId, step_id: stepId, label, destination_url: destinationUrl }).select().single();
@@ -292,31 +292,43 @@ export async function handleMetaWebhook(rawBody: string): Promise<{ status: numb
       const contact = await upsertContact({ igAccountId: account.id, igUserId: v.from.id, igUsername: v.from.username });
       const token = await decryptToken(account.page_access_token_enc);
       const steps = FlowStepsSchema.parse(flow.steps);
-      const firstStep = steps[0];
       let result = completed();
-      if (firstStep?.type === 'send_message' && (!firstStep.buttons || firstStep.buttons.length === 0)) {
-        // First touch from a public comment: footer the opening private reply
-        // (unless it's an intentionally plain message), then continue clean.
-        const replyText = firstStep.plain ? firstStep.text : appendPrivacyFooter(firstStep.text, flow.language as Lang);
-        await sendPrivateReplyToComment({ pageAccessToken: token, commentId: v.id, text: replyText });
-        await logMessage({ ig_account_id: account.id, contact_id: contact.id, direction: 'out', message_type: 'private_reply', payload: { text: replyText, plain: firstStep.plain ?? false }, meta_message_id: v.id });
-        result = await advanceFromNext({
-          step: firstStep,
-          steps,
-          language: flow.language as Lang,
-          contactId: contact.id,
-          igAccountId: account.id,
-          flowId: flow.id,
-          pageAccessToken: token,
-          igUserId: v.from.id,
-          effects: buildEffects(token, account.id, contact.id),
-        });
-      } else {
+      if (storyComment) {
+        // A public story comment is just a story reply that happens to be
+        // public: run the same flow as a DM. The opening message is addressed to
+        // the comment so Instagram delivers it to the user's inbox; buttons,
+        // links and footer-on-first all behave exactly like a story reply.
         result = await advance(
-          { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: v.from.id, appendFooter: true },
+          { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: v.from.id, appendFooter: true, replyToCommentId: v.id },
           { type: 'trigger' },
           buildEffects(token, account.id, contact.id),
         );
+      } else {
+        const firstStep = steps[0];
+        if (firstStep?.type === 'send_message' && (!firstStep.buttons || firstStep.buttons.length === 0)) {
+          // First touch from a post comment: footer the opening private reply
+          // (unless it's an intentionally plain message), then continue clean.
+          const replyText = firstStep.plain ? firstStep.text : appendPrivacyFooter(firstStep.text, flow.language as Lang);
+          await sendPrivateReplyToComment({ pageAccessToken: token, commentId: v.id, text: replyText });
+          await logMessage({ ig_account_id: account.id, contact_id: contact.id, direction: 'out', message_type: 'private_reply', payload: { text: replyText, plain: firstStep.plain ?? false }, meta_message_id: v.id });
+          result = await advanceFromNext({
+            step: firstStep,
+            steps,
+            language: flow.language as Lang,
+            contactId: contact.id,
+            igAccountId: account.id,
+            flowId: flow.id,
+            pageAccessToken: token,
+            igUserId: v.from.id,
+            effects: buildEffects(token, account.id, contact.id),
+          });
+        } else {
+          result = await advance(
+            { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: v.from.id, appendFooter: true },
+            { type: 'trigger' },
+            buildEffects(token, account.id, contact.id),
+          );
+        }
       }
       await saveFlowResult(contact.id, flow.id, result);
     }

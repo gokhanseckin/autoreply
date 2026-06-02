@@ -102,7 +102,7 @@ describe('POST /api/webhooks/meta', () => {
     }));
   });
 
-  it('routes a public story comment to the story-reply flow via private DM reply', async () => {
+  it('runs a public story comment through the story-reply flow as a DM addressed to the comment', async () => {
     vi.mocked(findStoryReplyFlow).mockResolvedValue({ id: 'story-flow', language: 'en', steps: [{ id: 's1', type: 'send_message', text: 'Story comment matched' }] } as any);
 
     const res = await POST(signed(JSON.stringify(storyComment)));
@@ -110,8 +110,10 @@ describe('POST /api/webhooks/meta', () => {
     expect(res.status).toBe(200);
     expect(findStoryReplyFlow).toHaveBeenCalledWith({ igAccountId: 'a1', text: 'reply' });
     expect(findCommentFlow).not.toHaveBeenCalled();
-    const { sendPrivateReplyToComment } = await import('@/lib/meta/client');
-    expect(sendPrivateReplyToComment).toHaveBeenCalledWith(expect.objectContaining({ commentId: '18000000000000001' }));
+    const { sendText, sendPrivateReplyToComment } = await import('@/lib/meta/client');
+    // First (and only) message is addressed to the comment so it lands in DMs.
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ commentId: '18000000000000001', text: expect.stringContaining('Story comment matched') }));
+    expect(sendPrivateReplyToComment).not.toHaveBeenCalled();
   });
 
   it('starts a DM flow and clears state when the first step ends the flow', async () => {

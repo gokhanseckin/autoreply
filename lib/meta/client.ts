@@ -28,31 +28,42 @@ async function call(token: string, path: string, body: unknown) {
   return JSON.parse(text) as { message_id: string; recipient_id: string };
 }
 
-export async function sendText(args: { pageAccessToken: string; igUserId: string; text: string }) {
-  return call(args.pageAccessToken, '/me/messages', {
-    recipient: { id: args.igUserId },
+// `commentId`, when set, addresses the message to a comment instead of a user.
+// This is how the first DM to a commenter is initiated (`recipient.comment_id`);
+// it goes to the same /me/messages endpoint and carries the full message body,
+// so buttons/templates work on that opening reply just like a normal DM.
+function recipientFor(args: { igUserId?: string; commentId?: string }) {
+  return args.commentId ? { comment_id: args.commentId } : { id: args.igUserId };
+}
+
+export async function sendText(args: { pageAccessToken: string; igUserId?: string; text: string; commentId?: string }) {
+  const body: Record<string, unknown> = {
+    recipient: recipientFor(args),
     message: { text: args.text },
-    messaging_type: 'RESPONSE',
-  });
+  };
+  if (!args.commentId) body.messaging_type = 'RESPONSE';
+  return call(args.pageAccessToken, '/me/messages', body);
 }
 
 export async function sendButtons(args: {
   pageAccessToken: string;
-  igUserId: string;
+  igUserId?: string;
   text: string;
   buttons: Button[];
+  commentId?: string;
 }) {
   if (args.buttons.length > 3) throw new Error('Meta allows at most 3 buttons per template');
-  return call(args.pageAccessToken, '/me/messages', {
-    recipient: { id: args.igUserId },
+  const body: Record<string, unknown> = {
+    recipient: recipientFor(args),
     message: {
       attachment: {
         type: 'template',
         payload: { template_type: 'button', text: args.text, buttons: args.buttons },
       },
     },
-    messaging_type: 'RESPONSE',
-  });
+  };
+  if (!args.commentId) body.messaging_type = 'RESPONSE';
+  return call(args.pageAccessToken, '/me/messages', body);
 }
 
 export async function sendPrivateReplyToComment(args: {
