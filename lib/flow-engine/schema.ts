@@ -14,6 +14,10 @@ export const SendMessageStep = z.object({
   text: z.string().min(1),
   buttons: z.array(Button).max(3).optional(),
   next_id: z.string().optional(),
+  // `plain` sends a natural-looking text DM: no privacy footer, no button
+  // template (so Instagram renders it as an ordinary message, not bold card),
+  // links in the text stay tappable. Mutually exclusive with `buttons`.
+  plain: z.boolean().optional(),
 });
 
 export const WaitForButtonStep = z.object({

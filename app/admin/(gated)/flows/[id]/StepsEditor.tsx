@@ -9,6 +9,7 @@ import {
   createEndStep,
   createLinkStep,
   createMessageStep,
+  createPlainMessageStep,
   nextStepId,
   toGuidedSteps,
   type GuidedFlowStep,
@@ -21,6 +22,7 @@ type EmailStep = Extract<FlowStep, { type: 'collect_email' }>;
 type Button = NonNullable<MessageStep['buttons']>[number];
 
 function stepTitle(step: GuidedFlowStep) {
+  if (step.type === 'send_message' && step.plain) return 'Plain message';
   if (step.type === 'send_message' && step.buttons?.length) return 'Choice message';
   if (step.type === 'send_message') return 'Message';
   if (step.type === 'send_link') return 'Tracked link';
@@ -29,6 +31,7 @@ function stepTitle(step: GuidedFlowStep) {
 }
 
 function stepBadge(step: GuidedFlowStep) {
+  if (step.type === 'send_message' && step.plain) return 'plain';
   if (step.type === 'send_message' && step.buttons?.length) return 'choice';
   if (step.type === 'send_message') return 'message';
   if (step.type === 'send_link') return 'link';
@@ -58,20 +61,22 @@ export function StepsEditor({ flowId, initialSteps }: { flowId: string; initialS
     setSteps((current) => current.map((step, i) => (i === index ? ({ ...step, ...patch } as GuidedFlowStep) : step)));
   }
 
-  function addStep(kind: 'message' | 'choice' | 'link' | 'email' | 'end') {
+  function addStep(kind: 'message' | 'plain' | 'choice' | 'link' | 'email' | 'end') {
     setSteps((current) => {
       const id = nextStepId(current);
       const index = Number(id.slice(1));
       const step =
         kind === 'message'
           ? createMessageStep(index)
-          : kind === 'choice'
-            ? createChoiceStep(index)
-            : kind === 'link'
-              ? createLinkStep(index)
-              : kind === 'email'
-                ? createEmailStep(index)
-                : createEndStep(index);
+          : kind === 'plain'
+            ? createPlainMessageStep(index)
+            : kind === 'choice'
+              ? createChoiceStep(index)
+              : kind === 'link'
+                ? createLinkStep(index)
+                : kind === 'email'
+                  ? createEmailStep(index)
+                  : createEndStep(index);
       return [...current, { ...step, id }];
     });
     setOk(false);
@@ -210,6 +215,7 @@ export function StepsEditor({ flowId, initialSteps }: { flowId: string; initialS
         <div className="space-y-3">
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={() => addStep('message')} className="rounded border px-3 py-2 text-sm">Add message</button>
+            <button type="button" onClick={() => addStep('plain')} className="rounded border px-3 py-2 text-sm">Add plain message</button>
             <button type="button" onClick={() => addStep('choice')} className="rounded border px-3 py-2 text-sm">Add choice</button>
             <button type="button" onClick={() => addStep('link')} className="rounded border px-3 py-2 text-sm">Add link</button>
             <button type="button" onClick={() => addStep('email')} className="rounded border px-3 py-2 text-sm">Collect email</button>
@@ -334,6 +340,7 @@ function MessageFields({
   updateButton: (stepIndex: number, buttonIndex: number, button: Button) => void;
   removeButton: (stepIndex: number, buttonIndex: number) => void;
 }) {
+  const plain = !!step.plain;
   return (
     <>
       <label className="grid gap-1 text-sm">
@@ -341,26 +348,42 @@ function MessageFields({
         <textarea value={step.text} onChange={(e) => patchStep(index, { text: e.target.value })} className="min-h-24 border p-2" />
       </label>
 
-      <div className="space-y-2">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-medium text-gray-500">Buttons</span>
-          <button type="button" onClick={() => addButton(index)} disabled={(step.buttons?.length ?? 0) >= 3} className="rounded border px-2 py-1 text-xs disabled:opacity-40">
-            Add button
-          </button>
-        </div>
-        {(step.buttons ?? []).map((button, buttonIndex) => (
-          <ButtonFields
-            key={buttonIndex}
-            button={button}
-            step={step}
-            steps={steps}
-            onChange={(nextButton) => updateButton(index, buttonIndex, nextButton)}
-            onRemove={() => removeButton(index, buttonIndex)}
-          />
-        ))}
-      </div>
+      <label className="flex items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={plain}
+          onChange={(e) => patchStep(index, e.target.checked ? { plain: true, buttons: undefined } : { plain: undefined })}
+          className="mt-1"
+        />
+        <span>
+          <span className="font-medium">Plain message</span>
+          <span className="block text-xs text-gray-500">Sends a natural text DM — no privacy footer, no buttons, links stay tappable.</span>
+        </span>
+      </label>
 
-      {!step.buttons?.length && <NextSelector step={step} steps={steps} index={index} setNext={setNext} />}
+      {!plain && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-medium text-gray-500">Buttons</span>
+            <button type="button" onClick={() => addButton(index)} disabled={(step.buttons?.length ?? 0) >= 3} className="rounded border px-2 py-1 text-xs disabled:opacity-40">
+              Add button
+            </button>
+          </div>
+          <p className="text-xs text-gray-400">Buttons render as tappable Instagram buttons with a contrasting background. Add one with an &ldquo;Open URL&rdquo; action to send a noticeable call-to-action link.</p>
+          {(step.buttons ?? []).map((button, buttonIndex) => (
+            <ButtonFields
+              key={buttonIndex}
+              button={button}
+              step={step}
+              steps={steps}
+              onChange={(nextButton) => updateButton(index, buttonIndex, nextButton)}
+              onRemove={() => removeButton(index, buttonIndex)}
+            />
+          ))}
+        </div>
+      )}
+
+      {(plain || !step.buttons?.length) && <NextSelector step={step} steps={steps} index={index} setNext={setNext} />}
     </>
   );
 }

@@ -3,6 +3,7 @@ import {
   canUseGuidedBuilder,
   createLinkStep,
   createMessageStep,
+  createPlainMessageStep,
   toGuidedSteps,
 } from '@/app/admin/(gated)/flows/[id]/flow-builder-model';
 
@@ -14,6 +15,14 @@ describe('flow-builder-model', () => {
       { id: 's3', type: 'collect_email' },
       { id: 's4', type: 'end' },
     ])).toBe(true);
+  });
+
+  it('builds a plain message block and keeps it guided-compatible', () => {
+    const plain = createPlainMessageStep(5);
+    expect(plain).toMatchObject({ id: 's5', type: 'send_message', plain: true });
+    expect(canUseGuidedBuilder([plain])).toBe(true);
+    // round-trips through the normalizer without losing the plain flag
+    expect(toGuidedSteps([plain])?.[0]).toMatchObject({ plain: true });
   });
 
   it('falls back to advanced JSON for unsupported engine steps', () => {

@@ -69,6 +69,15 @@ export function createMessageStep(index: number): GuidedFlowStep {
   };
 }
 
+export function createPlainMessageStep(index: number): GuidedFlowStep {
+  return {
+    id: `s${index}`,
+    type: 'send_message',
+    text: 'hey! thanks for reaching out',
+    plain: true,
+  };
+}
+
 export function createChoiceStep(index: number): GuidedFlowStep {
   return {
     id: `s${index}`,

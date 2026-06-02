@@ -15,6 +15,10 @@ export type FlowContext = {
   flowId: string;
   pageAccessToken: string;
   igUserId: string;
+  // When true (a fresh trigger), the privacy footer is appended to the first
+  // non-plain message this run sends; later messages stay clean. Continuations
+  // of an already-started conversation pass false so replies look natural.
+  appendFooter?: boolean;
 };
 
 export type Event =
@@ -54,6 +58,16 @@ export async function advance(ctx: FlowContext, event: Event, effects: Effects):
   let step = findStep(ctx, stepId);
   const expiresAt = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
 
+  // The footer rides only the first non-plain message of a fresh trigger.
+  let footerUsed = false;
+  const withFooter = (body: string): string => {
+    if (ctx.appendFooter && !footerUsed) {
+      footerUsed = true;
+      return appendPrivacyFooter(body, ctx.language);
+    }
+    return body;
+  };
+
   while (true) {
     if (step.type === 'send_message') {
       // Re-entry after the user tapped one of this step's buttons. The postback
@@ -73,8 +87,9 @@ export async function advance(ctx: FlowContext, event: Event, effects: Effects):
         continue;
       }
 
-      const text = appendPrivacyFooter(step.text, ctx.language);
-      if (step.buttons && step.buttons.length) {
+      // Plain messages render as an ordinary text DM: no footer, no buttons.
+      if (step.buttons && step.buttons.length && !step.plain) {
+        const text = withFooter(step.text);
         const buttons = step.buttons.map((b) => {
           if (b.action.type === 'url') return { type: 'web_url' as const, title: b.label, url: b.action.url };
           return { type: 'postback' as const, title: b.label, payload: b.action.type === 'next' ? b.action.next_id : `END_${step.id}` };
@@ -84,8 +99,9 @@ export async function advance(ctx: FlowContext, event: Event, effects: Effects):
         // Wait on this step itself; the next button tap re-enters here and routes by payload.
         return { nextStepId: step.id, awaitingInputType: 'button', expiresAt };
       } else {
+        const text = step.plain ? step.text : withFooter(step.text);
         const sent = await effects.sendText({ token: ctx.pageAccessToken, igUserId: ctx.igUserId, text });
-        await effects.logSend({ messageType: 'text', payload: { text }, metaMessageId: sent.message_id });
+        await effects.logSend({ messageType: 'text', payload: { text, plain: step.plain ?? false }, metaMessageId: sent.message_id });
         if (step.next_id) { step = findStep(ctx, step.next_id); continue; }
         return { nextStepId: null, awaitingInputType: null, expiresAt };
       }
@@ -94,7 +110,7 @@ export async function advance(ctx: FlowContext, event: Event, effects: Effects):
     if (step.type === 'send_link') {
       const code = await effects.recordLink({ flowId: ctx.flowId, stepId: step.id, label: step.label, destinationUrl: step.destination_url, contactId: ctx.contactId });
       const url = `${baseUrl}/r/${code}`;
-      const text = appendPrivacyFooter(step.text, ctx.language);
+      const text = withFooter(step.text);
       const sent = await effects.sendButtons({ token: ctx.pageAccessToken, igUserId: ctx.igUserId, text, buttons: [{ type: 'web_url', title: step.label, url }] });
       await effects.logSend({ messageType: 'buttons', payload: { text, link_code: code, destination: step.destination_url }, metaMessageId: sent.message_id });
       if (step.next_id) { step = findStep(ctx, step.next_id); continue; }

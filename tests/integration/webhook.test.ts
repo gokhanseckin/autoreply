@@ -4,6 +4,7 @@ import { POST } from '@/app/api/webhooks/meta/route';
 import comment from '../fixtures/meta/comment.json';
 import message from '../fixtures/meta/message.json';
 import storyReply from '../fixtures/meta/story_reply.json';
+import storyComment from '../fixtures/meta/story_comment.json';
 import { findCommentFlow, findDmFlow, findStoryReplyFlow } from '@/lib/flow-engine/routing';
 import { findIgAccountByBusinessId, loadConversationState, saveConversationState } from '@/lib/db/queries';
 import { captureEmail } from '@/lib/flow-engine/email-step';
@@ -99,6 +100,18 @@ describe('POST /api/webhooks/meta', () => {
       current_step_id: null,
       awaiting_input_type: null,
     }));
+  });
+
+  it('routes a public story comment to the story-reply flow via private DM reply', async () => {
+    vi.mocked(findStoryReplyFlow).mockResolvedValue({ id: 'story-flow', language: 'en', steps: [{ id: 's1', type: 'send_message', text: 'Story comment matched' }] } as any);
+
+    const res = await POST(signed(JSON.stringify(storyComment)));
+
+    expect(res.status).toBe(200);
+    expect(findStoryReplyFlow).toHaveBeenCalledWith({ igAccountId: 'a1', text: 'reply' });
+    expect(findCommentFlow).not.toHaveBeenCalled();
+    const { sendPrivateReplyToComment } = await import('@/lib/meta/client');
+    expect(sendPrivateReplyToComment).toHaveBeenCalledWith(expect.objectContaining({ commentId: '18000000000000001' }));
   });
 
   it('starts a DM flow and clears state when the first step ends the flow', async () => {
