@@ -81,3 +81,90 @@ describe('advance', () => {
     expect(result.awaitingInputType).toBeNull();
   });
 });
+
+describe('advance footer policy', () => {
+  function capturing() {
+    const sent: { kind: 'text' | 'buttons'; text: string }[] = [];
+    const fx: Effects = {
+      sendText: async ({ text }) => { sent.push({ kind: 'text', text }); return { message_id: 'm' }; },
+      sendButtons: async ({ text }) => { sent.push({ kind: 'buttons', text }); return { message_id: 'm' }; },
+      recordLink: async () => 'CODE',
+      logSend: async () => {},
+    };
+    return { sent, fx };
+  }
+
+  const twoMessages: FlowStep[] = [
+    { id: 's1', type: 'send_message', text: 'First', next_id: 's2' },
+    { id: 's2', type: 'send_message', text: 'Second' },
+  ];
+
+  it('appends the privacy footer to only the first message of a fresh trigger', async () => {
+    const { sent, fx } = capturing();
+    await advance(ctx({ steps: twoMessages, appendFooter: true }), { type: 'trigger' }, fx);
+    expect(sent[0].text).toContain('Privacy:');
+    expect(sent[1].text).toBe('Second');
+  });
+
+  it('never footers a continuation (appendFooter false)', async () => {
+    const { sent, fx } = capturing();
+    await advance(ctx({ steps: twoMessages, appendFooter: false }), { type: 'trigger' }, fx);
+    expect(sent[0].text).toBe('First');
+    expect(sent[1].text).toBe('Second');
+  });
+
+  it('sends plain messages as bare text and lets the footer fall to the next normal message', async () => {
+    const plainSteps: FlowStep[] = [
+      { id: 's1', type: 'send_message', text: 'natural hello', plain: true, next_id: 's2' },
+      { id: 's2', type: 'send_message', text: 'follow up' },
+    ];
+    const { sent, fx } = capturing();
+    await advance(ctx({ steps: plainSteps, appendFooter: true }), { type: 'trigger' }, fx);
+    expect(sent[0]).toEqual({ kind: 'text', text: 'natural hello' });
+    expect(sent[1].text).toContain('Privacy:');
+  });
+
+  it('ignores buttons on a plain message and sends plain text', async () => {
+    const plainWithButtons: FlowStep[] = [
+      { id: 's1', type: 'send_message', text: 'just text', plain: true, buttons: [{ label: 'X', action: { type: 'end' } }] },
+    ];
+    const { sent, fx } = capturing();
+    await advance(ctx({ steps: plainWithButtons, appendFooter: true }), { type: 'trigger' }, fx);
+    expect(sent).toEqual([{ kind: 'text', text: 'just text' }]);
+  });
+});
+
+describe('advance comment opener', () => {
+  it('addresses only the first message to the comment id, then the user', async () => {
+    const seen: { commentId?: string; igUserId: string }[] = [];
+    const fx: Effects = {
+      sendText: async ({ commentId, igUserId }) => { seen.push({ commentId, igUserId }); return { message_id: 'm' }; },
+      sendButtons: async ({ commentId, igUserId }) => { seen.push({ commentId, igUserId }); return { message_id: 'm' }; },
+      recordLink: async () => 'CODE',
+      logSend: async () => {},
+    };
+    const twoMsg: FlowStep[] = [
+      { id: 's1', type: 'send_message', text: 'first', next_id: 's2' },
+      { id: 's2', type: 'send_message', text: 'second' },
+    ];
+    await advance(ctx({ steps: twoMsg, igUserId: 'u1', replyToCommentId: 'CMT' }), { type: 'trigger' }, fx);
+    expect(seen[0].commentId).toBe('CMT');
+    expect(seen[1].commentId).toBeUndefined();
+    expect(seen[1].igUserId).toBe('u1');
+  });
+
+  it('carries buttons on the comment-addressed opener', async () => {
+    const seen: { kind: string; commentId?: string }[] = [];
+    const fx: Effects = {
+      sendText: async ({ commentId }) => { seen.push({ kind: 'text', commentId }); return { message_id: 'm' }; },
+      sendButtons: async ({ commentId }) => { seen.push({ kind: 'buttons', commentId }); return { message_id: 'm' }; },
+      recordLink: async () => 'CODE',
+      logSend: async () => {},
+    };
+    const choiceFirst: FlowStep[] = [
+      { id: 's1', type: 'send_message', text: 'Want the free thing?', buttons: [{ label: 'Yes', action: { type: 'end' } }] },
+    ];
+    await advance(ctx({ steps: choiceFirst, igUserId: 'u1', replyToCommentId: 'CMT' }), { type: 'trigger' }, fx);
+    expect(seen[0]).toEqual({ kind: 'buttons', commentId: 'CMT' });
+  });
+});

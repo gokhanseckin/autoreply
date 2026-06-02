@@ -1,4 +1,4 @@
-import { MetaWebhookSchema, CommentValue } from '@/lib/meta/types';
+import { MetaWebhookSchema, CommentValue, isStoryComment } from '@/lib/meta/types';
 import { matchesErasureKeyword } from '@/lib/flow-engine/reserved-keywords';
 import { findCommentFlow, findDmFlow, findStoryReplyFlow } from '@/lib/flow-engine/routing';
 import { advance, type AdvanceResult, type Effects, type Lang } from '@/lib/flow-engine/machine';
@@ -18,8 +18,8 @@ import type { Json } from '@/lib/db/types';
 
 function buildEffects(token: string, igAccountId: string, contactId: string): Effects {
   return {
-    sendText: ({ token: t, igUserId, text }) => sendText({ pageAccessToken: t, igUserId, text }),
-    sendButtons: ({ token: t, igUserId, text, buttons }) => sendButtons({ pageAccessToken: t, igUserId, text, buttons: buttons as any }),
+    sendText: ({ token: t, igUserId, text, commentId }) => sendText({ pageAccessToken: t, igUserId, text, commentId }),
+    sendButtons: ({ token: t, igUserId, text, buttons, commentId }) => sendButtons({ pageAccessToken: t, igUserId, text, buttons: buttons as any, commentId }),
     recordLink: async ({ flowId, stepId, label, destinationUrl, contactId: c }) => {
       const db = serviceClient();
       const { data: link } = await db.from('links').insert({ flow_id: flowId, step_id: stepId, label, destination_url: destinationUrl }).select().single();
@@ -100,6 +100,8 @@ async function advanceFromNext(args: {
       flowId: args.flowId,
       pageAccessToken: args.pageAccessToken,
       igUserId: args.igUserId,
+      // A continuation of an already-greeted conversation — keep it footer-free.
+      appendFooter: false,
     },
     { type: 'trigger' },
     args.effects,
@@ -272,34 +274,61 @@ export async function handleMetaWebhook(rawBody: string): Promise<{ status: numb
       const account = await findIgAccountByBusinessId(entry.id);
       logWebhookDecision('comment_account_lookup', { entryId: shortId(entry.id), found: !!account, accountId: shortId(account?.id) });
       if (!account) continue;
-      const flow = await findCommentFlow({ igAccountId: account.id, postId: v.media.id, commentText: v.text });
-      logWebhookDecision('comment_flow_lookup', { mediaId: shortId(v.media.id), matched: !!flow, flowId: shortId(flow?.id) });
+      // Public story comments arrive on the same `comments` channel as post
+      // comments but aren't tied to a post — route them to the account's
+      // story-reply flows so the same keywords fire whether a user replies to
+      // a story (DM) or comments on it.
+      const storyComment = isStoryComment(v);
+      const flow = storyComment
+        ? await findStoryReplyFlow({ igAccountId: account.id, text: v.text })
+        : await findCommentFlow({ igAccountId: account.id, postId: v.media.id, commentText: v.text });
+      logWebhookDecision('comment_flow_lookup', {
+        mediaId: shortId(v.media.id),
+        source: storyComment ? 'story_comment' : 'post_comment',
+        matched: !!flow,
+        flowId: shortId(flow?.id),
+      });
       if (!flow) continue;
       const contact = await upsertContact({ igAccountId: account.id, igUserId: v.from.id, igUsername: v.from.username });
       const token = await decryptToken(account.page_access_token_enc);
       const steps = FlowStepsSchema.parse(flow.steps);
-      const firstStep = steps[0];
       let result = completed();
-      if (firstStep?.type === 'send_message' && (!firstStep.buttons || firstStep.buttons.length === 0)) {
-        await sendPrivateReplyToComment({ pageAccessToken: token, commentId: v.id, text: firstStep.text });
-        await logMessage({ ig_account_id: account.id, contact_id: contact.id, direction: 'out', message_type: 'private_reply', payload: { text: firstStep.text }, meta_message_id: v.id });
-        result = await advanceFromNext({
-          step: firstStep,
-          steps,
-          language: flow.language as Lang,
-          contactId: contact.id,
-          igAccountId: account.id,
-          flowId: flow.id,
-          pageAccessToken: token,
-          igUserId: v.from.id,
-          effects: buildEffects(token, account.id, contact.id),
-        });
-      } else {
+      if (storyComment) {
+        // A public story comment is just a story reply that happens to be
+        // public: run the same flow as a DM. The opening message is addressed to
+        // the comment so Instagram delivers it to the user's inbox; buttons,
+        // links and footer-on-first all behave exactly like a story reply.
         result = await advance(
-          { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: v.from.id },
+          { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: v.from.id, appendFooter: true, replyToCommentId: v.id },
           { type: 'trigger' },
           buildEffects(token, account.id, contact.id),
         );
+      } else {
+        const firstStep = steps[0];
+        if (firstStep?.type === 'send_message' && (!firstStep.buttons || firstStep.buttons.length === 0)) {
+          // First touch from a post comment: footer the opening private reply
+          // (unless it's an intentionally plain message), then continue clean.
+          const replyText = firstStep.plain ? firstStep.text : appendPrivacyFooter(firstStep.text, flow.language as Lang);
+          await sendPrivateReplyToComment({ pageAccessToken: token, commentId: v.id, text: replyText });
+          await logMessage({ ig_account_id: account.id, contact_id: contact.id, direction: 'out', message_type: 'private_reply', payload: { text: replyText, plain: firstStep.plain ?? false }, meta_message_id: v.id });
+          result = await advanceFromNext({
+            step: firstStep,
+            steps,
+            language: flow.language as Lang,
+            contactId: contact.id,
+            igAccountId: account.id,
+            flowId: flow.id,
+            pageAccessToken: token,
+            igUserId: v.from.id,
+            effects: buildEffects(token, account.id, contact.id),
+          });
+        } else {
+          result = await advance(
+            { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: v.from.id, appendFooter: true },
+            { type: 'trigger' },
+            buildEffects(token, account.id, contact.id),
+          );
+        }
       }
       await saveFlowResult(contact.id, flow.id, result);
     }
@@ -340,7 +369,7 @@ export async function handleMetaWebhook(rawBody: string): Promise<{ status: numb
 
       if (m.message?.text && matchesErasureKeyword(m.message.text)) {
         const result = await advance(
-          { steps: buildErasureSteps((account.default_language as 'tr' | 'en')), language: account.default_language as 'tr' | 'en', currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: ERASURE_FLOW_ID, pageAccessToken: token, igUserId: m.sender.id },
+          { steps: buildErasureSteps((account.default_language as 'tr' | 'en')), language: account.default_language as 'tr' | 'en', currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: ERASURE_FLOW_ID, pageAccessToken: token, igUserId: m.sender.id, appendFooter: true },
           { type: 'trigger' },
           buildEffects(token, account.id, contact.id),
         );
@@ -384,7 +413,7 @@ export async function handleMetaWebhook(rawBody: string): Promise<{ status: numb
             ? { type: 'button' as const, payload: m.postback.payload }
             : { type: 'text' as const, text: m.message?.text ?? '' };
           const result = await advance(
-            { steps: FlowStepsSchema.parse(flow.data.steps), language: flow.data.language as Lang, currentStepId: state.current_step_id, contactId: contact.id, igAccountId: account.id, flowId: flow.data.id, pageAccessToken: token, igUserId: m.sender.id },
+            { steps: FlowStepsSchema.parse(flow.data.steps), language: flow.data.language as Lang, currentStepId: state.current_step_id, contactId: contact.id, igAccountId: account.id, flowId: flow.data.id, pageAccessToken: token, igUserId: m.sender.id, appendFooter: false },
             event,
             effects,
           );
@@ -411,7 +440,7 @@ export async function handleMetaWebhook(rawBody: string): Promise<{ status: numb
       });
       if (!flow) continue;
       const result = await advance(
-        { steps: FlowStepsSchema.parse(flow.steps), language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: m.sender.id },
+        { steps: FlowStepsSchema.parse(flow.steps), language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: m.sender.id, appendFooter: true },
         { type: 'trigger' },
         buildEffects(token, account.id, contact.id),
       );
