@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { POST } from '@/app/api/webhooks/meta/route';
 import comment from '../fixtures/meta/comment.json';
 import message from '../fixtures/meta/message.json';
+import storyReply from '../fixtures/meta/story_reply.json';
 import { findCommentFlow, findDmFlow, findStoryReplyFlow } from '@/lib/flow-engine/routing';
 import { findIgAccountByBusinessId, loadConversationState, saveConversationState } from '@/lib/db/queries';
 import { captureEmail } from '@/lib/flow-engine/email-step';
@@ -113,6 +114,19 @@ describe('POST /api/webhooks/meta', () => {
       current_step_id: null,
       awaiting_input_type: null,
     }));
+  });
+
+  it('starts a story reply flow globally without checking DM flow routing', async () => {
+    vi.mocked(findStoryReplyFlow).mockResolvedValue({ id: 'story-flow', language: 'en', steps: [{ id: 'story1', type: 'send_message', text: 'Story reply matched' }] } as any);
+    vi.mocked(findDmFlow).mockResolvedValue({ id: 'dm-flow', language: 'en', steps: [{ id: 'dm1', type: 'send_message', text: 'DM matched' }] } as any);
+
+    const res = await POST(signed(JSON.stringify(storyReply)));
+
+    expect(res.status).toBe(200);
+    expect(findStoryReplyFlow).toHaveBeenCalledWith({ igAccountId: 'a1', text: 'reply' });
+    expect(findDmFlow).not.toHaveBeenCalled();
+    const { sendText } = await import('@/lib/meta/client');
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('Story reply matched') }));
   });
 
   it('records email consent and waits for the next email text', async () => {

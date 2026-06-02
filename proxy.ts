@@ -1,11 +1,21 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
+import { getAuthRedirectUrl } from '@/lib/auth/redirect';
 
 // Refreshes the Supabase auth session on admin requests. Server Components can't
 // write cookies, so without this the access token never refreshes and the admin
 // gets bounced to sign-in once it expires. The gated layout still enforces the
 // allowlist — this only keeps the session alive.
 export async function proxy(request: NextRequest) {
+  const authRedirectUrl = getAuthRedirectUrl(request.url);
+  if (authRedirectUrl) {
+    return NextResponse.redirect(authRedirectUrl);
+  }
+
+  if (!request.nextUrl.pathname.startsWith('/admin') || request.nextUrl.pathname === '/admin/sign-in') {
+    return NextResponse.next();
+  }
+
   const response = NextResponse.next({ request });
 
   const supabase = createServerClient(
@@ -29,5 +39,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/admin/:path*'],
+  matcher: ['/', '/auth/callback', '/admin/:path*'],
 };

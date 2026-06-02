@@ -7,7 +7,7 @@ export default async function GatedAdminLayout({ children }: { children: React.R
   const allowlist = (process.env.ADMIN_ALLOWLIST ?? '').split(',').map(s => s.trim()).filter(Boolean);
   if (!user || !allowlist.includes(user.email ?? '')) redirect('/admin/sign-in');
   return (
-    <div className="min-h-screen">
+    <div className="admin-shell min-h-screen">
       <nav className="border-b p-3 flex gap-4 text-sm">
         <a href="/admin/accounts">Accounts</a>
         <a href="/admin/posts">Posts</a>

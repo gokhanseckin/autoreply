@@ -24,3 +24,77 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+.admin-shell {
+  color: var(--foreground);
+}
+
+@media (prefers-color-scheme: dark) {
+  .admin-shell {
+    --admin-surface: #111113;
+    --admin-surface-muted: #18181b;
+    --admin-surface-raised: #09090b;
+    --admin-border: #3f3f46;
+    --admin-text-strong: #f4f4f5;
+    --admin-text-muted: #a1a1aa;
+  }
+
+  .admin-shell .bg-white,
+  .admin-shell .bg-gray-50 {
+    background-color: var(--admin-surface);
+  }
+
+  .admin-shell .bg-gray-100 {
+    background-color: var(--admin-surface-muted);
+  }
+
+  .admin-shell .bg-black {
+    background-color: var(--admin-text-strong);
+  }
+
+  .admin-shell .bg-black.text-white {
+    color: #18181b;
+  }
+
+  .admin-shell .text-gray-700,
+  .admin-shell .text-gray-600 {
+    color: #d4d4d8;
+  }
+
+  .admin-shell .text-gray-500,
+  .admin-shell .text-gray-400 {
+    color: var(--admin-text-muted);
+  }
+
+  .admin-shell .border,
+  .admin-shell .border-t,
+  .admin-shell .border-b,
+  .admin-shell .border-l,
+  .admin-shell .border-r,
+  .admin-shell .border-dashed,
+  .admin-shell .divide-y > :not(:last-child) {
+    border-color: var(--admin-border);
+  }
+
+  .admin-shell input,
+  .admin-shell select,
+  .admin-shell textarea {
+    background-color: var(--admin-surface-raised);
+    color: var(--admin-text-strong);
+    border-color: var(--admin-border);
+  }
+
+  .admin-shell input::placeholder,
+  .admin-shell textarea::placeholder {
+    color: #71717a;
+  }
+
+  .admin-shell option {
+    background-color: var(--admin-surface-raised);
+    color: var(--admin-text-strong);
+  }
+
+  .admin-shell button:disabled {
+    opacity: 1;
+  }
+}
