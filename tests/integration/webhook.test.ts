@@ -341,6 +341,40 @@ describe('POST /api/webhooks/meta', () => {
     expect(loadConversationState).not.toHaveBeenCalled();
   });
 
+  it('logs non-sensitive shape details for ignored no-text webhook messages', async () => {
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const body = JSON.stringify({
+      object: 'instagram',
+      entry: [{
+        id: '17841400000000000',
+        time: 1748372160,
+        messaging: [{
+          sender: { id: '8800000000000000' },
+          recipient: { id: '17841400000000000' },
+          timestamp: 1748372160000,
+          message: {
+            mid: 'NO-TEXT-MID',
+            reply_to: { story: { id: 'STORY-ID', url: 'https://example.com/story' } },
+            attachments: [{ type: 'story_mention', payload: { url: 'https://example.com/asset' } }],
+          },
+        }],
+      }],
+    });
+
+    const res = await POST(signed(body));
+
+    expect(res.status).toBe(200);
+    const shapeLog = infoSpy.mock.calls
+      .map(([, payload]) => String(payload))
+      .find((payload) => payload.includes('"event":"message_ignored_non_actionable_shape"'));
+    expect(shapeLog).toContain('"messageKeys":["attachments","mid","reply_to"]');
+    expect(shapeLog).toContain('"attachmentTypes":["story_mention"]');
+    expect(shapeLog).toContain('"replyToHasStory":true');
+    expect(shapeLog).not.toContain('https://example.com');
+    expect(loadConversationState).not.toHaveBeenCalled();
+    infoSpy.mockRestore();
+  });
+
   it('ignores echo webhook messages sent by the Instagram account', async () => {
     const body = JSON.stringify({
       object: 'instagram',

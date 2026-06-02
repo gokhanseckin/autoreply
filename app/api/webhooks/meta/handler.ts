@@ -52,6 +52,50 @@ function entryChanges(entry: { field?: string; value?: unknown; changes?: Array<
   return [...direct, ...(entry.changes ?? [])];
 }
 
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function sortedKeys(value: unknown): string[] {
+  const record = objectRecord(value);
+  return record ? Object.keys(record).sort() : [];
+}
+
+function arrayFrom(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function messagingShapeDetails(args: {
+  entryId: string;
+  mid: string;
+  message: unknown;
+}) {
+  const message = objectRecord(args.message);
+  const nestedMessage = objectRecord(message?.message);
+  const postback = objectRecord(message?.postback);
+  const replyTo = objectRecord(nestedMessage?.reply_to);
+  const story = objectRecord(replyTo?.story);
+  const attachments = arrayFrom(nestedMessage?.attachments);
+  return {
+    mid: shortId(args.mid),
+    entryId: shortId(args.entryId),
+    topLevelKeys: sortedKeys(message),
+    hasMessage: !!nestedMessage,
+    messageKeys: sortedKeys(nestedMessage),
+    hasText: typeof nestedMessage?.text === 'string' && nestedMessage.text.length > 0,
+    hasPostback: !!postback,
+    postbackKeys: sortedKeys(postback),
+    replyToKeys: sortedKeys(replyTo),
+    replyToHasStory: !!story,
+    storyKeys: sortedKeys(story),
+    attachmentCount: attachments.length,
+    attachmentTypes: attachments.slice(0, 5).map((attachment) => {
+      const record = objectRecord(attachment);
+      return typeof record?.type === 'string' ? record.type : typeof attachment;
+    }),
+  };
+}
+
 function parseCommentValues(value: unknown) {
   const items = Array.isArray(value) ? value : [value];
   const results = items.map((item) => CommentValue.safeParse(item));
@@ -395,6 +439,7 @@ export async function handleMetaWebhook(rawBody: string): Promise<{ status: numb
       const hasActionableText = typeof m.message?.text === 'string' && m.message.text.trim().length > 0;
       const hasActionablePostback = typeof m.postback?.payload === 'string' && m.postback.payload.length > 0;
       if (!hasActionableText && !hasActionablePostback) {
+        logWebhookDecision('message_ignored_non_actionable_shape', messagingShapeDetails({ entryId: entry.id, mid, message: m }));
         logWebhookDecision('message_ignored_non_actionable', { mid: shortId(mid) });
         continue;
       }

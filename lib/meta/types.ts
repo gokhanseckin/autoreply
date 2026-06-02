@@ -25,8 +25,8 @@ export const Change = z.object({
 });
 
 export const MessagingMessage = z.object({
-  sender: z.object({ id: z.string() }),
-  recipient: z.object({ id: z.string() }),
+  sender: z.object({ id: z.string() }).passthrough(),
+  recipient: z.object({ id: z.string() }).passthrough(),
   timestamp: z.number(),
   message: z
     .object({
@@ -34,10 +34,12 @@ export const MessagingMessage = z.object({
       text: z.string().optional(),
       reply_to: z
         .object({
-          story: z.object({ id: z.string(), url: z.string().optional() }).optional(),
+          story: z.object({ id: z.string(), url: z.string().optional() }).passthrough().optional(),
         })
+        .passthrough()
         .optional(),
     })
+    .passthrough()
     .optional(),
   postback: z
     .object({
@@ -45,8 +47,9 @@ export const MessagingMessage = z.object({
       payload: z.string(),
       title: z.string().optional(),
     })
+    .passthrough()
     .optional(),
-});
+}).passthrough();
 
 export const MetaEntry = z.object({
   id: z.string(),
