@@ -260,13 +260,25 @@ export async function handleMetaWebhook(rawBody: string): Promise<{ status: numb
 
     // Comments
     for (const change of entry.changes ?? []) {
+      // Log the field of every change so a story comment delivered under an
+      // unexpected field name is visible instead of silently skipped.
+      logWebhookDecision('change_field', { entryId: shortId(entry.id), field: change.field });
       if (change.field !== 'comments') continue;
       const parsedValue = CommentValue.safeParse(change.value);
       if (!parsedValue.success) {
-        logWebhookDecision('comment_value_rejected', { entryId: shortId(entry.id) });
+        logWebhookDecision('comment_value_rejected', {
+          entryId: shortId(entry.id),
+          issues: parsedValue.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+        });
         continue;
       }
       const v = parsedValue.data;
+      logWebhookDecision('comment_parsed', {
+        entryId: shortId(entry.id),
+        commentId: shortId(v.id),
+        mediaProductType: v.media.media_product_type ?? null,
+        isStory: isStoryComment(v),
+      });
       if (await alreadyProcessed(v.id)) {
         logWebhookDecision('comment_duplicate', { commentId: shortId(v.id) });
         continue;
