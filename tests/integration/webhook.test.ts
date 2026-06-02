@@ -254,6 +254,11 @@ describe('POST /api/webhooks/meta', () => {
       current_step_id: 'email1',
       awaiting_input_type: 'email',
     }));
+    const { sendText } = await import('@/lib/meta/client');
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({
+      igUserId: '8800000000000000',
+      text: 'Please type your email address in this chat.',
+    }));
   });
 
   it('captures an awaited email text, sends the result message, and ends without a next step', async () => {

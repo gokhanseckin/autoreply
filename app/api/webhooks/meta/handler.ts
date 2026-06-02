@@ -13,6 +13,8 @@ import { FlowStepsSchema, type FlowStep } from '@/lib/flow-engine/schema';
 import { CURRENT_POLICY_VERSION } from '@/lib/consent/policy-versions';
 import { appendPrivacyFooter } from '@/lib/consent/footer';
 import { captureEmail } from '@/lib/flow-engine/email-step';
+import { EMAIL_CONSENT_EN } from '@/lib/consent/email-consent-text.en';
+import { EMAIL_CONSENT_TR } from '@/lib/consent/email-consent-text.tr';
 import type { ProviderConfig } from '@/lib/email-providers/factory';
 import type { Json } from '@/lib/db/types';
 
@@ -143,6 +145,10 @@ function providerConfigFrom(value: unknown): ProviderConfig {
   return { kind: 'none' };
 }
 
+function emailConsentText(lang: Lang) {
+  return lang === 'tr' ? EMAIL_CONSENT_TR : EMAIL_CONSENT_EN;
+}
+
 async function advanceFromNext(args: {
   step: Extract<FlowStep, { type: 'collect_email' | 'send_message' }>;
   steps: FlowStep[];
@@ -180,8 +186,9 @@ async function sendTextWithLog(args: {
   contactId: string;
   language: Lang;
   text: string;
+  appendFooter?: boolean;
 }) {
-  const text = appendPrivacyFooter(args.text, args.language);
+  const text = args.appendFooter === false ? args.text : appendPrivacyFooter(args.text, args.language);
   const sent = await sendText({ pageAccessToken: args.token, igUserId: args.igUserId, text });
   await logMessage({
     ig_account_id: args.igAccountId,
@@ -223,6 +230,15 @@ async function maybeHandleEmailStep(args: {
       awaiting_input_type: 'email',
       expires_at: expiresIn24h(),
       context: { email: { stepId: step.id, retries: 0 } },
+    });
+    await sendTextWithLog({
+      token: args.token,
+      igUserId: args.igUserId,
+      igAccountId: args.account.id,
+      contactId: args.contact.id,
+      language,
+      text: emailConsentText(language).prompt,
+      appendFooter: false,
     });
     return true;
   }
