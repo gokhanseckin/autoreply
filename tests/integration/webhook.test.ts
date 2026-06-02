@@ -141,6 +141,31 @@ describe('POST /api/webhooks/meta', () => {
     expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ commentId: '18000000000000001' }));
   });
 
+  it('runs an array-shaped direct-entry story comment payload through the story-reply flow', async () => {
+    vi.mocked(findStoryReplyFlow).mockResolvedValue({ id: 'story-flow', language: 'en', steps: [{ id: 's1', type: 'send_message', text: 'Story comment matched' }] } as any);
+    const directStoryComment = {
+      object: 'instagram',
+      entry: [{
+        id: '17841400000000000',
+        time: 1748372160,
+        field: 'comments',
+        value: [{
+          id: '18000000000000003',
+          from: { id: '8800000000000000', username: 'laraseckinn' },
+          media: { id: '17900000000000000', media_product_type: 'STORY' },
+          text: 'bravo',
+        }],
+      }],
+    };
+
+    const res = await POST(signed(JSON.stringify(directStoryComment)));
+
+    expect(res.status).toBe(200);
+    expect(findStoryReplyFlow).toHaveBeenCalledWith({ igAccountId: 'a1', text: 'bravo' });
+    const { sendText } = await import('@/lib/meta/client');
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ commentId: '18000000000000003' }));
+  });
+
   it('accepts direct-entry story comments when Meta omits the commenter id', async () => {
     vi.mocked(findStoryReplyFlow).mockResolvedValue({ id: 'story-flow', language: 'en', steps: [{ id: 's1', type: 'send_message', text: 'Story comment matched' }] } as any);
     const directStoryComment = {

@@ -52,6 +52,22 @@ function entryChanges(entry: { field?: string; value?: unknown; changes?: Array<
   return [...direct, ...(entry.changes ?? [])];
 }
 
+function parseCommentValues(value: unknown) {
+  const items = Array.isArray(value) ? value : [value];
+  const results = items.map((item) => CommentValue.safeParse(item));
+  return {
+    comments: results.flatMap((result) => (result.success ? [result.data] : [])),
+    issues: results.flatMap((result) =>
+      result.success
+        ? []
+        : result.error.issues.map((issue) => ({
+          path: issue.path.join('.'),
+          message: issue.message,
+        })),
+    ),
+  };
+}
+
 function expiresIn24h(): string {
   return new Date(Date.now() + 24 * 3600 * 1000).toISOString();
 }
@@ -270,86 +286,93 @@ export async function handleMetaWebhook(rawBody: string): Promise<{ status: numb
       // unexpected field name is visible instead of silently skipped.
       logWebhookDecision('change_field', { entryId: shortId(entry.id), field: change.field });
       if (change.field !== 'comments') continue;
-      const parsedValue = CommentValue.safeParse(change.value);
-      if (!parsedValue.success) {
+      const parsedValues = parseCommentValues(change.value);
+      if (parsedValues.comments.length === 0) {
         logWebhookDecision('comment_value_rejected', {
           entryId: shortId(entry.id),
-          issues: parsedValue.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+          issues: parsedValues.issues,
         });
         continue;
       }
-      const v = parsedValue.data;
-      logWebhookDecision('comment_parsed', {
-        entryId: shortId(entry.id),
-        commentId: shortId(v.id),
-        mediaProductType: v.media.media_product_type ?? null,
-        isStory: isStoryComment(v),
-      });
-      if (await alreadyProcessed(v.id)) {
-        logWebhookDecision('comment_duplicate', { commentId: shortId(v.id) });
-        continue;
+      if (parsedValues.issues.length > 0) {
+        logWebhookDecision('comment_value_partially_rejected', {
+          entryId: shortId(entry.id),
+          issues: parsedValues.issues,
+        });
       }
-      const account = await findIgAccountByBusinessId(entry.id);
-      logWebhookDecision('comment_account_lookup', { entryId: shortId(entry.id), found: !!account, accountId: shortId(account?.id) });
-      if (!account) continue;
-      // Public story comments arrive on the same `comments` channel as post
-      // comments but aren't tied to a post — route them to the account's
-      // story-reply flows so the same keywords fire whether a user replies to
-      // a story (DM) or comments on it.
-      const storyComment = isStoryComment(v);
-      const flow = storyComment
-        ? await findStoryReplyFlow({ igAccountId: account.id, text: v.text })
-        : await findCommentFlow({ igAccountId: account.id, postId: v.media.id, commentText: v.text });
-      logWebhookDecision('comment_flow_lookup', {
-        mediaId: shortId(v.media.id),
-        source: storyComment ? 'story_comment' : 'post_comment',
-        matched: !!flow,
-        flowId: shortId(flow?.id),
-      });
-      if (!flow) continue;
-      const commenterId = v.from.id ?? `comment:${v.id}`;
-      const contact = await upsertContact({ igAccountId: account.id, igUserId: commenterId, igUsername: v.from.username });
-      const token = await decryptToken(account.page_access_token_enc);
-      const steps = FlowStepsSchema.parse(flow.steps);
-      let result = completed();
-      if (storyComment) {
-        // A public story comment is just a story reply that happens to be
-        // public: run the same flow as a DM. The opening message is addressed to
-        // the comment so Instagram delivers it to the user's inbox; buttons,
-        // links and footer-on-first all behave exactly like a story reply.
-        result = await advance(
-          { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: commenterId, appendFooter: true, replyToCommentId: v.id },
-          { type: 'trigger' },
-          buildEffects(token, account.id, contact.id),
-        );
-      } else {
-        const firstStep = steps[0];
-        if (firstStep?.type === 'send_message' && (!firstStep.buttons || firstStep.buttons.length === 0)) {
-          // First touch from a post comment: footer the opening private reply
-          // (unless it's an intentionally plain message), then continue clean.
-          const replyText = firstStep.plain ? firstStep.text : appendPrivacyFooter(firstStep.text, flow.language as Lang);
-          await sendPrivateReplyToComment({ pageAccessToken: token, commentId: v.id, text: replyText });
-          await logMessage({ ig_account_id: account.id, contact_id: contact.id, direction: 'out', message_type: 'private_reply', payload: { text: replyText, plain: firstStep.plain ?? false }, meta_message_id: v.id });
-          result = await advanceFromNext({
-            step: firstStep,
-            steps,
-            language: flow.language as Lang,
-            contactId: contact.id,
-            igAccountId: account.id,
-            flowId: flow.id,
-            pageAccessToken: token,
-            igUserId: commenterId,
-            effects: buildEffects(token, account.id, contact.id),
-          });
-        } else {
+      for (const v of parsedValues.comments) {
+        logWebhookDecision('comment_parsed', {
+          entryId: shortId(entry.id),
+          commentId: shortId(v.id),
+          mediaProductType: v.media.media_product_type ?? null,
+          isStory: isStoryComment(v),
+        });
+        if (await alreadyProcessed(v.id)) {
+          logWebhookDecision('comment_duplicate', { commentId: shortId(v.id) });
+          continue;
+        }
+        const account = await findIgAccountByBusinessId(entry.id);
+        logWebhookDecision('comment_account_lookup', { entryId: shortId(entry.id), found: !!account, accountId: shortId(account?.id) });
+        if (!account) continue;
+        // Public story comments arrive on the same `comments` channel as post
+        // comments but aren't tied to a post — route them to the account's
+        // story-reply flows so the same keywords fire whether a user replies to
+        // a story (DM) or comments on it.
+        const storyComment = isStoryComment(v);
+        const flow = storyComment
+          ? await findStoryReplyFlow({ igAccountId: account.id, text: v.text })
+          : await findCommentFlow({ igAccountId: account.id, postId: v.media.id, commentText: v.text });
+        logWebhookDecision('comment_flow_lookup', {
+          mediaId: shortId(v.media.id),
+          source: storyComment ? 'story_comment' : 'post_comment',
+          matched: !!flow,
+          flowId: shortId(flow?.id),
+        });
+        if (!flow) continue;
+        const commenterId = v.from.id ?? `comment:${v.id}`;
+        const contact = await upsertContact({ igAccountId: account.id, igUserId: commenterId, igUsername: v.from.username });
+        const token = await decryptToken(account.page_access_token_enc);
+        const steps = FlowStepsSchema.parse(flow.steps);
+        let result = completed();
+        if (storyComment) {
+          // A public story comment is just a story reply that happens to be
+          // public: run the same flow as a DM. The opening message is addressed to
+          // the comment so Instagram delivers it to the user's inbox; buttons,
+          // links and footer-on-first all behave exactly like a story reply.
           result = await advance(
-            { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: commenterId, appendFooter: true },
+            { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: commenterId, appendFooter: true, replyToCommentId: v.id },
             { type: 'trigger' },
             buildEffects(token, account.id, contact.id),
           );
+        } else {
+          const firstStep = steps[0];
+          if (firstStep?.type === 'send_message' && (!firstStep.buttons || firstStep.buttons.length === 0)) {
+            // First touch from a post comment: footer the opening private reply
+            // (unless it's an intentionally plain message), then continue clean.
+            const replyText = firstStep.plain ? firstStep.text : appendPrivacyFooter(firstStep.text, flow.language as Lang);
+            await sendPrivateReplyToComment({ pageAccessToken: token, commentId: v.id, text: replyText });
+            await logMessage({ ig_account_id: account.id, contact_id: contact.id, direction: 'out', message_type: 'private_reply', payload: { text: replyText, plain: firstStep.plain ?? false }, meta_message_id: v.id });
+            result = await advanceFromNext({
+              step: firstStep,
+              steps,
+              language: flow.language as Lang,
+              contactId: contact.id,
+              igAccountId: account.id,
+              flowId: flow.id,
+              pageAccessToken: token,
+              igUserId: commenterId,
+              effects: buildEffects(token, account.id, contact.id),
+            });
+          } else {
+            result = await advance(
+              { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: commenterId, appendFooter: true },
+              { type: 'trigger' },
+              buildEffects(token, account.id, contact.id),
+            );
+          }
         }
+        await saveFlowResult(contact.id, flow.id, result);
       }
-      await saveFlowResult(contact.id, flow.id, result);
     }
 
     // Messages and postbacks
