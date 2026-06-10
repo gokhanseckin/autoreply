@@ -75,6 +75,19 @@ export async function alreadyProcessed(metaMessageId: string): Promise<boolean> 
   return !!data;
 }
 
+// Atomically claims an inbound webhook event. Meta redelivers webhooks within
+// seconds; the unique meta_message_id constraint makes exactly one delivery
+// win the insert. Returns false when another delivery already claimed it.
+export async function claimInboundMessage(row: Tables['messages_log']['Insert']): Promise<boolean> {
+  const db = serviceClient();
+  const { error } = await db.from('messages_log').insert(row);
+  if (error) {
+    if (error.code === '23505') return false;
+    throw error;
+  }
+  return true;
+}
+
 export async function logMessage(row: Tables['messages_log']['Insert']) {
   const db = serviceClient();
   const { data, error } = await db.from('messages_log').insert(row).select().single();

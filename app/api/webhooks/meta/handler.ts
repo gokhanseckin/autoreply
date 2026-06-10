@@ -1,10 +1,11 @@
-import { MetaWebhookSchema, CommentValue, isStoryComment } from '@/lib/meta/types';
+import { z } from 'zod';
+import { MetaWebhookSchema, CommentValue, MessagingMessage, isStoryComment } from '@/lib/meta/types';
 import { matchesErasureKeyword } from '@/lib/flow-engine/reserved-keywords';
 import { findCommentFlow, findDmFlow, findStoryReplyFlow } from '@/lib/flow-engine/routing';
 import { advance, type AdvanceResult, type Effects, type Lang } from '@/lib/flow-engine/machine';
 import { buildErasureSteps, ERASURE_FLOW_ID } from '@/lib/flow-engine/erasure-flow';
 import { executeErasure } from '@/lib/flow-engine/erasure-execute';
-import { findIgAccountByBusinessId, upsertContact, loadConversationState, saveConversationState, alreadyProcessed, logMessage } from '@/lib/db/queries';
+import { findIgAccountByBusinessId, upsertContact, loadConversationState, saveConversationState, alreadyProcessed, claimInboundMessage, logMessage } from '@/lib/db/queries';
 import { decryptSecret, decodeBytea } from '@/lib/db/encryption';
 import { sendButtons, sendText, sendPrivateReplyToComment } from '@/lib/meta/client';
 import { generateLinkCode } from '@/lib/links/shorten';
@@ -324,6 +325,211 @@ async function maybeHandleEmailStep(args: {
   return true;
 }
 
+function errorDetail(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function processCommentEvent(entryId: string, v: z.infer<typeof CommentValue>): Promise<void> {
+  logWebhookDecision('comment_parsed', {
+    entryId: shortId(entryId),
+    commentId: shortId(v.id),
+    mediaProductType: v.media.media_product_type ?? null,
+    isStory: isStoryComment(v),
+  });
+  if (await alreadyProcessed(v.id)) {
+    logWebhookDecision('comment_duplicate', { commentId: shortId(v.id) });
+    return;
+  }
+  const account = await findIgAccountByBusinessId(entryId);
+  logWebhookDecision('comment_account_lookup', { entryId: shortId(entryId), found: !!account, accountId: shortId(account?.id) });
+  if (!account) return;
+  // Public story comments arrive on the same `comments` channel as post
+  // comments but aren't tied to a post — route them to the account's
+  // story-reply flows so the same keywords fire whether a user replies to
+  // a story (DM) or comments on it.
+  const storyComment = isStoryComment(v);
+  const flow = storyComment
+    ? await findStoryReplyFlow({ igAccountId: account.id, text: v.text })
+    : await findCommentFlow({ igAccountId: account.id, postId: v.media.id, commentText: v.text });
+  logWebhookDecision('comment_flow_lookup', {
+    mediaId: shortId(v.media.id),
+    source: storyComment ? 'story_comment' : 'post_comment',
+    matched: !!flow,
+    flowId: shortId(flow?.id),
+  });
+  if (!flow) return;
+  const commenterId = v.from.id ?? `comment:${v.id}`;
+  const contact = await upsertContact({ igAccountId: account.id, igUserId: commenterId, igUsername: v.from.username });
+  // Claim the comment before any send: Meta redelivers webhooks within
+  // seconds, and the unique meta_message_id lets exactly one delivery win.
+  const claimed = await claimInboundMessage({ ig_account_id: account.id, contact_id: contact.id, direction: 'in', message_type: 'comment', payload: v as any, meta_message_id: v.id });
+  if (!claimed) {
+    logWebhookDecision('comment_duplicate', { commentId: shortId(v.id) });
+    return;
+  }
+  const token = await decryptToken(account.page_access_token_enc);
+  const steps = FlowStepsSchema.parse(flow.steps);
+  let result = completed();
+  if (storyComment) {
+    // A public story comment is just a story reply that happens to be
+    // public: run the same flow as a DM. The opening message is addressed to
+    // the comment so Instagram delivers it to the user's inbox; buttons,
+    // links and footer-on-first all behave exactly like a story reply.
+    result = await advance(
+      { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: commenterId, appendFooter: true, replyToCommentId: v.id },
+      { type: 'trigger' },
+      buildEffects(token, account.id, contact.id),
+    );
+  } else {
+    const firstStep = steps[0];
+    if (firstStep?.type === 'send_message' && (!firstStep.buttons || firstStep.buttons.length === 0)) {
+      // First touch from a post comment: footer the opening private reply
+      // (unless it's an intentionally plain message), then continue clean.
+      const replyText = firstStep.plain ? firstStep.text : appendPrivacyFooter(firstStep.text, flow.language as Lang);
+      const sentReply = await sendPrivateReplyToComment({ pageAccessToken: token, commentId: v.id, text: replyText });
+      await logMessage({ ig_account_id: account.id, contact_id: contact.id, direction: 'out', message_type: 'private_reply', payload: { text: replyText, plain: firstStep.plain ?? false }, meta_message_id: sentReply.message_id });
+      result = await advanceFromNext({
+        step: firstStep,
+        steps,
+        language: flow.language as Lang,
+        contactId: contact.id,
+        igAccountId: account.id,
+        flowId: flow.id,
+        pageAccessToken: token,
+        igUserId: commenterId,
+        effects: buildEffects(token, account.id, contact.id),
+      });
+    } else {
+      result = await advance(
+        { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: commenterId, appendFooter: true },
+        { type: 'trigger' },
+        buildEffects(token, account.id, contact.id),
+      );
+    }
+  }
+  await saveFlowResult(contact.id, flow.id, result);
+}
+
+async function processMessagingEvent(entryId: string, m: z.infer<typeof MessagingMessage>, mid: string): Promise<void> {
+  logWebhookDecision('message_received', {
+    mid: shortId(mid),
+    entryId: shortId(entryId),
+    senderId: shortId(m.sender.id),
+    recipientId: shortId(m.recipient.id),
+    kind: m.postback ? 'postback' : 'message',
+    hasText: !!m.message?.text,
+    textPreview: m.message?.text?.slice(0, 80) ?? null,
+    postbackPayload: m.postback?.payload ?? null,
+  });
+  if (m.sender.id === entryId || m.sender.id === m.recipient.id) {
+    logWebhookDecision('message_ignored_echo', { mid: shortId(mid), senderId: shortId(m.sender.id) });
+    return;
+  }
+  const hasActionableText = typeof m.message?.text === 'string' && m.message.text.trim().length > 0;
+  const hasActionablePostback = typeof m.postback?.payload === 'string' && m.postback.payload.length > 0;
+  if (!hasActionableText && !hasActionablePostback) {
+    logWebhookDecision('message_ignored_non_actionable_shape', messagingShapeDetails({ entryId, mid, message: m }));
+    logWebhookDecision('message_ignored_non_actionable', { mid: shortId(mid) });
+    return;
+  }
+  const account = await findIgAccountByBusinessId(entryId);
+  logWebhookDecision('message_account_lookup', { entryId: shortId(entryId), found: !!account, accountId: shortId(account?.id) });
+  if (!account) return;
+  const contact = await upsertContact({ igAccountId: account.id, igUserId: m.sender.id });
+  // Claim the message before any send: Meta redelivers webhooks within
+  // seconds, and the unique meta_message_id lets exactly one delivery win.
+  const claimed = await claimInboundMessage({ ig_account_id: account.id, contact_id: contact.id, direction: 'in', message_type: m.postback ? 'postback' : 'text', payload: m as any, meta_message_id: mid });
+  if (!claimed) {
+    logWebhookDecision('message_duplicate', { mid: shortId(mid) });
+    return;
+  }
+  const token = await decryptToken(account.page_access_token_enc);
+
+  if (m.message?.text && matchesErasureKeyword(m.message.text)) {
+    const result = await advance(
+      { steps: buildErasureSteps((account.default_language as 'tr' | 'en')), language: account.default_language as 'tr' | 'en', currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: ERASURE_FLOW_ID, pageAccessToken: token, igUserId: m.sender.id, appendFooter: true },
+      { type: 'trigger' },
+      buildEffects(token, account.id, contact.id),
+    );
+    await saveConversationState({ contact_id: contact.id, current_flow_id: null, current_step_id: result.nextStepId, awaiting_input_type: result.awaitingInputType, expires_at: result.expiresAt, context: { erasure: true } });
+    return;
+  }
+
+  const state = await loadConversationState(contact.id);
+  logWebhookDecision('conversation_state', {
+    contactId: shortId(contact.id),
+    currentFlowId: shortId(state?.current_flow_id),
+    currentStepId: state?.current_step_id ?? null,
+    awaitingInputType: state?.awaiting_input_type ?? null,
+  });
+  if (state?.context && (state.context as any).erasure && m.postback) {
+    if (m.postback.payload === 'execute') {
+      await executeErasure({ contactId: contact.id, requestedVia: 'dm' });
+      return;
+    }
+  }
+
+  if (state?.current_flow_id) {
+    const flow = await serviceClient().from('flows').select('*').eq('id', state.current_flow_id).maybeSingle();
+    logWebhookDecision('active_flow_lookup', { flowId: shortId(state.current_flow_id), found: !!flow.data });
+    if (flow.data) {
+      const effects = buildEffects(token, account.id, contact.id);
+      const handledEmail = await maybeHandleEmailStep({
+        state,
+        flow: flow.data,
+        account,
+        contact,
+        token,
+        igUserId: m.sender.id,
+        event: m.postback ? { postback: m.postback } : { text: m.message?.text ?? '' },
+        effects,
+      });
+      logWebhookDecision('active_flow_email_gate', { handled: handledEmail });
+      if (handledEmail) return;
+
+      const event = m.postback
+        ? { type: 'button' as const, payload: m.postback.payload }
+        : { type: 'text' as const, text: m.message?.text ?? '' };
+      const result = await advance(
+        { steps: FlowStepsSchema.parse(flow.data.steps), language: flow.data.language as Lang, currentStepId: state.current_step_id, contactId: contact.id, igAccountId: account.id, flowId: flow.data.id, pageAccessToken: token, igUserId: m.sender.id, appendFooter: false },
+        event,
+        effects,
+      );
+      await saveFlowResult(contact.id, flow.data.id, result);
+      logWebhookDecision('active_flow_advanced', {
+        flowId: shortId(flow.data.id),
+        nextStepId: result.nextStepId,
+        awaitingInputType: result.awaitingInputType,
+      });
+      return;
+    }
+  }
+
+  let flow = null;
+  if (m.message?.reply_to?.story && m.message.text) {
+    flow = await findStoryReplyFlow({ igAccountId: account.id, text: m.message.text });
+  } else if (m.message?.text) {
+    flow = await findDmFlow({ igAccountId: account.id, text: m.message.text });
+  }
+  logWebhookDecision('new_flow_lookup', {
+    triggerType: m.message?.reply_to?.story ? 'story_reply' : m.message?.text ? 'dm' : 'none',
+    matched: !!flow,
+    flowId: shortId(flow?.id),
+  });
+  if (!flow) return;
+  const result = await advance(
+    { steps: FlowStepsSchema.parse(flow.steps), language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: m.sender.id, appendFooter: true },
+    { type: 'trigger' },
+    buildEffects(token, account.id, contact.id),
+  );
+  await saveFlowResult(contact.id, flow.id, result);
+  logWebhookDecision('new_flow_advanced', {
+    flowId: shortId(flow.id),
+    nextStepId: result.nextStepId,
+    awaitingInputType: result.awaitingInputType,
+  });
+}
+
 export async function handleMetaWebhook(rawBody: string): Promise<{ status: number; body?: string }> {
   const parsed = MetaWebhookSchema.safeParse(JSON.parse(rawBody));
   if (!parsed.success) {
@@ -361,198 +567,24 @@ export async function handleMetaWebhook(rawBody: string): Promise<{ status: numb
         });
       }
       for (const v of parsedValues.comments) {
-        logWebhookDecision('comment_parsed', {
-          entryId: shortId(entry.id),
-          commentId: shortId(v.id),
-          mediaProductType: v.media.media_product_type ?? null,
-          isStory: isStoryComment(v),
-        });
-        if (await alreadyProcessed(v.id)) {
-          logWebhookDecision('comment_duplicate', { commentId: shortId(v.id) });
-          continue;
+        try {
+          await processCommentEvent(entry.id, v);
+        } catch (err) {
+          // One failing comment must not abort the rest of the batch.
+          console.error('[webhook:meta]', JSON.stringify({ event: 'comment_failed', commentId: shortId(v.id), error: errorDetail(err) }));
         }
-        const account = await findIgAccountByBusinessId(entry.id);
-        logWebhookDecision('comment_account_lookup', { entryId: shortId(entry.id), found: !!account, accountId: shortId(account?.id) });
-        if (!account) continue;
-        // Public story comments arrive on the same `comments` channel as post
-        // comments but aren't tied to a post — route them to the account's
-        // story-reply flows so the same keywords fire whether a user replies to
-        // a story (DM) or comments on it.
-        const storyComment = isStoryComment(v);
-        const flow = storyComment
-          ? await findStoryReplyFlow({ igAccountId: account.id, text: v.text })
-          : await findCommentFlow({ igAccountId: account.id, postId: v.media.id, commentText: v.text });
-        logWebhookDecision('comment_flow_lookup', {
-          mediaId: shortId(v.media.id),
-          source: storyComment ? 'story_comment' : 'post_comment',
-          matched: !!flow,
-          flowId: shortId(flow?.id),
-        });
-        if (!flow) continue;
-        const commenterId = v.from.id ?? `comment:${v.id}`;
-        const contact = await upsertContact({ igAccountId: account.id, igUserId: commenterId, igUsername: v.from.username });
-        const token = await decryptToken(account.page_access_token_enc);
-        const steps = FlowStepsSchema.parse(flow.steps);
-        let result = completed();
-        if (storyComment) {
-          // A public story comment is just a story reply that happens to be
-          // public: run the same flow as a DM. The opening message is addressed to
-          // the comment so Instagram delivers it to the user's inbox; buttons,
-          // links and footer-on-first all behave exactly like a story reply.
-          result = await advance(
-            { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: commenterId, appendFooter: true, replyToCommentId: v.id },
-            { type: 'trigger' },
-            buildEffects(token, account.id, contact.id),
-          );
-        } else {
-          const firstStep = steps[0];
-          if (firstStep?.type === 'send_message' && (!firstStep.buttons || firstStep.buttons.length === 0)) {
-            // First touch from a post comment: footer the opening private reply
-            // (unless it's an intentionally plain message), then continue clean.
-            const replyText = firstStep.plain ? firstStep.text : appendPrivacyFooter(firstStep.text, flow.language as Lang);
-            await sendPrivateReplyToComment({ pageAccessToken: token, commentId: v.id, text: replyText });
-            await logMessage({ ig_account_id: account.id, contact_id: contact.id, direction: 'out', message_type: 'private_reply', payload: { text: replyText, plain: firstStep.plain ?? false }, meta_message_id: v.id });
-            result = await advanceFromNext({
-              step: firstStep,
-              steps,
-              language: flow.language as Lang,
-              contactId: contact.id,
-              igAccountId: account.id,
-              flowId: flow.id,
-              pageAccessToken: token,
-              igUserId: commenterId,
-              effects: buildEffects(token, account.id, contact.id),
-            });
-          } else {
-            result = await advance(
-              { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: commenterId, appendFooter: true },
-              { type: 'trigger' },
-              buildEffects(token, account.id, contact.id),
-            );
-          }
-        }
-        await saveFlowResult(contact.id, flow.id, result);
       }
     }
 
     // Messages and postbacks
     for (const m of entry.messaging ?? []) {
       const mid = m.message?.mid ?? m.postback?.mid ?? `${m.sender.id}:${m.timestamp}`;
-      logWebhookDecision('message_received', {
-        mid: shortId(mid),
-        entryId: shortId(entry.id),
-        senderId: shortId(m.sender.id),
-        recipientId: shortId(m.recipient.id),
-        kind: m.postback ? 'postback' : 'message',
-        hasText: !!m.message?.text,
-        textPreview: m.message?.text?.slice(0, 80) ?? null,
-        postbackPayload: m.postback?.payload ?? null,
-      });
-      if (m.sender.id === entry.id || m.sender.id === m.recipient.id) {
-        logWebhookDecision('message_ignored_echo', { mid: shortId(mid), senderId: shortId(m.sender.id) });
-        continue;
+      try {
+        await processMessagingEvent(entry.id, m, mid);
+      } catch (err) {
+        // One failing message must not abort the rest of the batch.
+        console.error('[webhook:meta]', JSON.stringify({ event: 'message_failed', mid: shortId(mid), error: errorDetail(err) }));
       }
-      const hasActionableText = typeof m.message?.text === 'string' && m.message.text.trim().length > 0;
-      const hasActionablePostback = typeof m.postback?.payload === 'string' && m.postback.payload.length > 0;
-      if (!hasActionableText && !hasActionablePostback) {
-        logWebhookDecision('message_ignored_non_actionable_shape', messagingShapeDetails({ entryId: entry.id, mid, message: m }));
-        logWebhookDecision('message_ignored_non_actionable', { mid: shortId(mid) });
-        continue;
-      }
-      if (await alreadyProcessed(mid)) {
-        logWebhookDecision('message_duplicate', { mid: shortId(mid) });
-        continue;
-      }
-      const account = await findIgAccountByBusinessId(entry.id);
-      logWebhookDecision('message_account_lookup', { entryId: shortId(entry.id), found: !!account, accountId: shortId(account?.id) });
-      if (!account) continue;
-      const contact = await upsertContact({ igAccountId: account.id, igUserId: m.sender.id });
-      const token = await decryptToken(account.page_access_token_enc);
-      await logMessage({ ig_account_id: account.id, contact_id: contact.id, direction: 'in', message_type: m.postback ? 'postback' : 'text', payload: m as any, meta_message_id: mid });
-
-      if (m.message?.text && matchesErasureKeyword(m.message.text)) {
-        const result = await advance(
-          { steps: buildErasureSteps((account.default_language as 'tr' | 'en')), language: account.default_language as 'tr' | 'en', currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: ERASURE_FLOW_ID, pageAccessToken: token, igUserId: m.sender.id, appendFooter: true },
-          { type: 'trigger' },
-          buildEffects(token, account.id, contact.id),
-        );
-        await saveConversationState({ contact_id: contact.id, current_flow_id: null, current_step_id: result.nextStepId, awaiting_input_type: result.awaitingInputType, expires_at: result.expiresAt, context: { erasure: true } });
-        continue;
-      }
-
-      const state = await loadConversationState(contact.id);
-      logWebhookDecision('conversation_state', {
-        contactId: shortId(contact.id),
-        currentFlowId: shortId(state?.current_flow_id),
-        currentStepId: state?.current_step_id ?? null,
-        awaitingInputType: state?.awaiting_input_type ?? null,
-      });
-      if (state?.context && (state.context as any).erasure && m.postback) {
-        if (m.postback.payload === 'execute') {
-          await executeErasure({ contactId: contact.id, requestedVia: 'dm' });
-          continue;
-        }
-      }
-
-      if (state?.current_flow_id) {
-        const flow = await serviceClient().from('flows').select('*').eq('id', state.current_flow_id).maybeSingle();
-        logWebhookDecision('active_flow_lookup', { flowId: shortId(state.current_flow_id), found: !!flow.data });
-        if (flow.data) {
-          const effects = buildEffects(token, account.id, contact.id);
-          const handledEmail = await maybeHandleEmailStep({
-            state,
-            flow: flow.data,
-            account,
-            contact,
-            token,
-            igUserId: m.sender.id,
-            event: m.postback ? { postback: m.postback } : { text: m.message?.text ?? '' },
-            effects,
-          });
-          logWebhookDecision('active_flow_email_gate', { handled: handledEmail });
-          if (handledEmail) continue;
-
-          const event = m.postback
-            ? { type: 'button' as const, payload: m.postback.payload }
-            : { type: 'text' as const, text: m.message?.text ?? '' };
-          const result = await advance(
-            { steps: FlowStepsSchema.parse(flow.data.steps), language: flow.data.language as Lang, currentStepId: state.current_step_id, contactId: contact.id, igAccountId: account.id, flowId: flow.data.id, pageAccessToken: token, igUserId: m.sender.id, appendFooter: false },
-            event,
-            effects,
-          );
-          await saveFlowResult(contact.id, flow.data.id, result);
-          logWebhookDecision('active_flow_advanced', {
-            flowId: shortId(flow.data.id),
-            nextStepId: result.nextStepId,
-            awaitingInputType: result.awaitingInputType,
-          });
-          continue;
-        }
-      }
-
-      let flow = null;
-      if (m.message?.reply_to?.story && m.message.text) {
-        flow = await findStoryReplyFlow({ igAccountId: account.id, text: m.message.text });
-      } else if (m.message?.text) {
-        flow = await findDmFlow({ igAccountId: account.id, text: m.message.text });
-      }
-      logWebhookDecision('new_flow_lookup', {
-        triggerType: m.message?.reply_to?.story ? 'story_reply' : m.message?.text ? 'dm' : 'none',
-        matched: !!flow,
-        flowId: shortId(flow?.id),
-      });
-      if (!flow) continue;
-      const result = await advance(
-        { steps: FlowStepsSchema.parse(flow.steps), language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: m.sender.id, appendFooter: true },
-        { type: 'trigger' },
-        buildEffects(token, account.id, contact.id),
-      );
-      await saveFlowResult(contact.id, flow.id, result);
-      logWebhookDecision('new_flow_advanced', {
-        flowId: shortId(flow.id),
-        nextStepId: result.nextStepId,
-        awaitingInputType: result.awaitingInputType,
-      });
     }
   }
 

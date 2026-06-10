@@ -6,7 +6,7 @@ import message from '../fixtures/meta/message.json';
 import storyReply from '../fixtures/meta/story_reply.json';
 import storyComment from '../fixtures/meta/story_comment.json';
 import { findCommentFlow, findDmFlow, findStoryReplyFlow } from '@/lib/flow-engine/routing';
-import { findIgAccountByBusinessId, loadConversationState, saveConversationState } from '@/lib/db/queries';
+import { claimInboundMessage, findIgAccountByBusinessId, loadConversationState, logMessage, saveConversationState } from '@/lib/db/queries';
 import { captureEmail } from '@/lib/flow-engine/email-step';
 
 const dbState = vi.hoisted(() => ({
@@ -20,6 +20,7 @@ vi.mock('@/lib/db/queries', () => ({
   loadConversationState: vi.fn().mockResolvedValue(null),
   saveConversationState: vi.fn().mockResolvedValue(undefined),
   alreadyProcessed: vi.fn().mockResolvedValue(false),
+  claimInboundMessage: vi.fn().mockResolvedValue(true),
   logMessage: vi.fn().mockResolvedValue({ id: 'log1' }),
 }));
 vi.mock('@/lib/flow-engine/routing', () => ({
@@ -67,6 +68,7 @@ beforeEach(() => {
   vi.mocked(findDmFlow).mockResolvedValue(null);
   vi.mocked(findStoryReplyFlow).mockResolvedValue(null);
   vi.mocked(loadConversationState).mockResolvedValue(null);
+  vi.mocked(claimInboundMessage).mockResolvedValue(true);
   vi.mocked(captureEmail).mockResolvedValue({ ok: true, status: 'confirmed', message: 'Confirmed' });
 });
 
@@ -378,6 +380,104 @@ describe('POST /api/webhooks/meta', () => {
     expect(shapeLog).not.toContain('https://example.com');
     expect(loadConversationState).not.toHaveBeenCalled();
     infoSpy.mockRestore();
+  });
+
+  it('continues processing remaining messages when one message in the batch fails', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(findDmFlow).mockResolvedValue({ id: 'dm-flow', language: 'en', steps: [{ id: 'dm1', type: 'send_message', text: 'Welcome' }] } as any);
+    const { sendText } = await import('@/lib/meta/client');
+    vi.mocked(sendText).mockRejectedValueOnce(new Error('Meta API down'));
+    const body = JSON.stringify({
+      object: 'instagram',
+      entry: [{
+        id: '17841400000000000',
+        time: 1748372160,
+        messaging: [
+          { sender: { id: '8800000000000001' }, recipient: { id: '17841400000000000' }, timestamp: 1748372160000, message: { mid: 'MID-FAIL', text: 'hello' } },
+          { sender: { id: '8800000000000002' }, recipient: { id: '17841400000000000' }, timestamp: 1748372161000, message: { mid: 'MID-OK', text: 'hello' } },
+        ],
+      }],
+    });
+
+    const res = await POST(signed(body));
+
+    expect(res.status).toBe(200);
+    expect(sendText).toHaveBeenCalledTimes(2);
+    const failureLog = errorSpy.mock.calls.map(([, payload]) => String(payload)).find((p) => p.includes('"event":"message_failed"'));
+    expect(failureLog).toBeDefined();
+    errorSpy.mockRestore();
+  });
+
+  it('continues processing remaining comments when one comment in the batch fails', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { sendPrivateReplyToComment } = await import('@/lib/meta/client');
+    vi.mocked(sendPrivateReplyToComment).mockRejectedValueOnce(new Error('Meta API down'));
+    const body = JSON.stringify({
+      object: 'instagram',
+      entry: [{
+        id: '17841400000000000',
+        time: 1748372160,
+        field: 'comments',
+        value: [
+          { id: '18000000000000011', from: { id: '8800000000000001', username: 'user_one' }, media: { id: '17900000000000000' }, text: 'first' },
+          { id: '18000000000000012', from: { id: '8800000000000002', username: 'user_two' }, media: { id: '17900000000000000' }, text: 'second' },
+        ],
+      }],
+    });
+
+    const res = await POST(signed(body));
+
+    expect(res.status).toBe(200);
+    expect(sendPrivateReplyToComment).toHaveBeenCalledTimes(2);
+    const failureLog = errorSpy.mock.calls.map(([, payload]) => String(payload)).find((p) => p.includes('"event":"comment_failed"'));
+    expect(failureLog).toBeDefined();
+    errorSpy.mockRestore();
+  });
+
+  it('skips a message another delivery already claimed, without sending anything', async () => {
+    vi.mocked(claimInboundMessage).mockResolvedValue(false);
+    vi.mocked(findDmFlow).mockResolvedValue({ id: 'dm-flow', language: 'en', steps: [{ id: 'dm1', type: 'send_message', text: 'Welcome' }] } as any);
+
+    const res = await POST(signed(JSON.stringify(message)));
+
+    expect(res.status).toBe(200);
+    const { sendText, sendButtons } = await import('@/lib/meta/client');
+    expect(sendText).not.toHaveBeenCalled();
+    expect(sendButtons).not.toHaveBeenCalled();
+    expect(saveConversationState).not.toHaveBeenCalled();
+  });
+
+  it('claims a comment before replying so story-comment redeliveries cannot re-run the flow', async () => {
+    vi.mocked(findStoryReplyFlow).mockResolvedValue({ id: 'story-flow', language: 'en', steps: [{ id: 's1', type: 'send_message', text: 'Story comment matched' }] } as any);
+
+    const res = await POST(signed(JSON.stringify(storyComment)));
+
+    expect(res.status).toBe(200);
+    expect(claimInboundMessage).toHaveBeenCalledWith(expect.objectContaining({
+      direction: 'in',
+      message_type: 'comment',
+      meta_message_id: '18000000000000001',
+    }));
+
+    // Redelivery of the same comment: claim is refused, nothing is sent.
+    vi.clearAllMocks();
+    vi.mocked(findStoryReplyFlow).mockResolvedValue({ id: 'story-flow', language: 'en', steps: [{ id: 's1', type: 'send_message', text: 'Story comment matched' }] } as any);
+    vi.mocked(claimInboundMessage).mockResolvedValue(false);
+    const redelivery = await POST(signed(JSON.stringify(storyComment)));
+    expect(redelivery.status).toBe(200);
+    const { sendText } = await import('@/lib/meta/client');
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it('logs the private reply under its own message id, not the comment id', async () => {
+    const res = await POST(signed(JSON.stringify(comment)));
+
+    expect(res.status).toBe(200);
+    expect(logMessage).toHaveBeenCalledWith(expect.objectContaining({
+      direction: 'out',
+      message_type: 'private_reply',
+      meta_message_id: 'm',
+    }));
   });
 
   it('ignores echo webhook messages sent by the Instagram account', async () => {

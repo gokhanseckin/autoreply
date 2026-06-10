@@ -100,6 +100,28 @@ describe('getMe', () => {
   });
 });
 
+describe('request timeouts', () => {
+  it('attaches an abort signal to message sends so a hung Meta call cannot stall the webhook', async () => {
+    await sendText({ pageAccessToken: 'TOKEN', igUserId: 'u_001', text: 'hello' });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('attaches an abort signal to getMe', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, status: 200, text: async () => '{"id":"app123"}' });
+    await getMe('TOKEN');
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('attaches an abort signal to webhook subscription calls', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, status: 200, text: async () => '{"success":true}' });
+    await subscribeToAppWebhooks('TOKEN');
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+});
+
 describe('subscribeToAppWebhooks', () => {
   it('POSTs the Instagram account subscription with comments and messaging fields', async () => {
     fetchMock.mockResolvedValueOnce({
