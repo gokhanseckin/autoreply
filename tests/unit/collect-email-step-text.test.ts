@@ -17,6 +17,7 @@ describe('collectEmailDefaults', () => {
     expect(d.decline).toBe('Decline');
     expect(d.request).toBe('Please enter your email');
     expect(d.declineGoodbye).toBe('No problem.');
+    expect(d.disclaimer.length).toBeGreaterThan(0);
   });
 });
 
@@ -34,5 +35,17 @@ describe('resolveCollectEmailText', () => {
   it('ignores blank/whitespace step values', () => {
     const r = resolveCollectEmailText({ id: 'e1', type: 'collect_email', accept_label: '   ' }, 'en');
     expect(r.accept).toBe('Accept');
+  });
+
+  it('uses all five step values when fully populated', () => {
+    const r = resolveCollectEmailText(
+      {
+        id: 'e1', type: 'collect_email',
+        disclaimer_message: 'D', accept_label: 'A', decline_label: 'X',
+        request_message: 'R', decline_message: 'G',
+      },
+      'en',
+    );
+    expect(r).toEqual({ disclaimer: 'D', accept: 'A', decline: 'X', request: 'R', declineGoodbye: 'G' });
   });
 });
