@@ -1,9 +1,11 @@
 'use server';
 import { serviceClient } from '@/lib/db/client';
 import { decryptSecret, decodeBytea } from '@/lib/db/encryption';
+import { isAdminRequest, requireAdmin, UNAUTHORIZED_MESSAGE } from '@/lib/auth/require-admin';
 import { revalidatePath } from 'next/cache';
 
 export async function setPostFlows(postId: string, flowIds: string[]) {
+  await requireAdmin();
   const db = serviceClient();
   await db.from('flow_posts').delete().eq('post_id', postId);
   if (flowIds.length > 0) {
@@ -15,6 +17,7 @@ export async function setPostFlows(postId: string, flowIds: string[]) {
 export type SyncResult = { ok: true; count: number } | { ok: false; error: string };
 
 export async function syncPosts(igAccountId: string): Promise<SyncResult> {
+  if (!(await isAdminRequest())) return { ok: false, error: UNAUTHORIZED_MESSAGE };
   const db = serviceClient();
   const { data: acc } = await db.from('ig_accounts').select('*').eq('id', igAccountId).single();
   if (!acc) return { ok: false, error: 'Account not found.' };

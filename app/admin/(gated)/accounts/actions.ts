@@ -2,6 +2,7 @@
 import { serviceClient } from '@/lib/db/client';
 import { decryptSecret, decodeBytea, encryptSecret, encodeBytea } from '@/lib/db/encryption';
 import { getMe, subscribeToAppWebhooks } from '@/lib/meta/client';
+import { isAdminRequest, UNAUTHORIZED_MESSAGE } from '@/lib/auth/require-admin';
 import { revalidatePath } from 'next/cache';
 
 export type AddAccountResult =
@@ -16,6 +17,7 @@ function errorMessage(error: unknown): string {
 }
 
 export async function addAccount(_prev: unknown, form: FormData): Promise<AddAccountResult> {
+  if (!(await isAdminRequest())) return { ok: false, error: UNAUTHORIZED_MESSAGE };
   const name = String(form.get('name'));
   const fbPage = String(form.get('fb_page_id') ?? '');
   const token = String(form.get('page_access_token'));
@@ -56,6 +58,7 @@ export async function addAccount(_prev: unknown, form: FormData): Promise<AddAcc
 }
 
 export async function repairWebhookSubscription(_prev: unknown, form: FormData): Promise<WebhookSubscriptionResult> {
+  if (!(await isAdminRequest())) return { ok: false, error: UNAUTHORIZED_MESSAGE };
   const accountId = String(form.get('account_id') ?? '');
   if (!accountId) return { ok: false, error: 'Choose an Instagram account first.' };
 

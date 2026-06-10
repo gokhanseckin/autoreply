@@ -3,6 +3,7 @@ import { serviceClient } from '@/lib/db/client';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { FlowStepsSchema } from '@/lib/flow-engine/schema';
+import { isAdminRequest, requireAdmin, UNAUTHORIZED_MESSAGE } from '@/lib/auth/require-admin';
 
 const LANGUAGES = new Set(['tr', 'en']);
 const TRIGGER_TYPES = new Set(['comment', 'dm', 'story_reply']);
@@ -38,6 +39,7 @@ function formatFlowStepIssues(issues: { path: PropertyKey[]; message: string }[]
 }
 
 export async function createFlow(form: FormData) {
+  await requireAdmin();
   const db = serviceClient();
   const keywords = parseKeywords(form.get('trigger_keywords'));
   const { data } = await db.from('flows').insert({
@@ -55,6 +57,7 @@ export async function saveFlowSteps(
   flowId: string,
   stepsJson: string,
 ): Promise<SaveResult> {
+  if (!(await isAdminRequest())) return { ok: false, error: UNAUTHORIZED_MESSAGE };
   let raw: unknown;
   try {
     raw = JSON.parse(stepsJson);
@@ -82,6 +85,7 @@ export async function saveFlowBuilderSteps(
   flowId: string,
   steps: unknown,
 ): Promise<SaveResult> {
+  if (!(await isAdminRequest())) return { ok: false, error: UNAUTHORIZED_MESSAGE };
   const result = FlowStepsSchema.safeParse(steps);
   if (!result.success) {
     return { ok: false, error: formatFlowStepIssues(result.error.issues) };
@@ -97,6 +101,7 @@ export async function saveFlowBuilderSteps(
 }
 
 export async function saveFlowSettings(flowId: string, form: FormData) {
+  await requireAdmin();
   const name = String(form.get('name') ?? '').trim();
   const language = String(form.get('language'));
   const triggerType = String(form.get('trigger_type'));
@@ -136,6 +141,7 @@ export async function saveFlowSettings(flowId: string, form: FormData) {
 }
 
 export async function setFlowArchived(flowId: string, archived: boolean) {
+  await requireAdmin();
   const db = serviceClient();
   const { error } = await db
     .from('flows')

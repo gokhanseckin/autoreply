@@ -1,11 +1,11 @@
 import { redirect } from 'next/navigation';
 import { userClient } from '@/lib/db/client';
+import { adminAllowlist } from '@/lib/auth/require-admin';
 
 export default async function GatedAdminLayout({ children }: { children: React.ReactNode }) {
   const supabase = await userClient();
   const { data: { user } } = await supabase.auth.getUser();
-  const allowlist = (process.env.ADMIN_ALLOWLIST ?? '').split(',').map(s => s.trim()).filter(Boolean);
-  if (!user || !allowlist.includes(user.email ?? '')) redirect('/admin/sign-in');
+  if (!user || !adminAllowlist().includes(user.email ?? '')) redirect('/admin/sign-in');
   return (
     <div className="admin-shell min-h-screen">
       <nav className="border-b p-3 flex gap-4 text-sm">

@@ -16,6 +16,13 @@ vi.mock('next/cache', () => ({
   revalidatePath: (path: string) => state.revalidated.push(path),
 }));
 
+// Auth wiring is covered by action-auth.test.ts; here the caller is an admin.
+vi.mock('@/lib/auth/require-admin', () => ({
+  isAdminRequest: vi.fn().mockResolvedValue(true),
+  requireAdmin: vi.fn().mockResolvedValue(undefined),
+  UNAUTHORIZED_MESSAGE: 'Unauthorized',
+}));
+
 vi.mock('@/lib/meta/client', () => ({
   getMe: vi.fn().mockResolvedValue({
     id: 'ig-app-id',
