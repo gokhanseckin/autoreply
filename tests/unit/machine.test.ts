@@ -168,3 +168,42 @@ describe('advance comment opener', () => {
     expect(seen[0]).toEqual({ kind: 'buttons', commentId: 'CMT' });
   });
 });
+
+describe('advance collect_email', () => {
+  function capturingButtons() {
+    const calls: { text: string; buttons: { title: string; payload?: string }[] }[] = [];
+    const fx: Effects = {
+      sendText: async () => ({ message_id: 'm' }),
+      sendButtons: async ({ text, buttons }) => { calls.push({ text, buttons }); return { message_id: 'm' }; },
+      recordLink: async () => 'CODE',
+      logSend: async () => {},
+    };
+    return { calls, fx };
+  }
+
+  it('renders the editable disclaimer and button labels and waits for a button', async () => {
+    const { calls, fx } = capturingButtons();
+    const emailSteps: FlowStep[] = [{
+      id: 'e1', type: 'collect_email',
+      disclaimer_message: 'Custom disclaimer', accept_label: 'Kabul Et', decline_label: 'Reddet',
+    }];
+
+    const result = await advance(ctx({ steps: emailSteps, currentStepId: 'e1', language: 'tr' }), { type: 'trigger' }, fx);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].text).toContain('Custom disclaimer');
+    expect(calls[0].buttons.map((b) => b.title)).toEqual(['Kabul Et', 'Reddet']);
+    expect(calls[0].buttons.map((b) => b.payload)).toEqual(['EMAIL_AGREE_e1', 'EMAIL_DECLINE_e1']);
+    expect(result.awaitingInputType).toBe('button');
+    expect(result.nextStepId).toBe('e1');
+  });
+
+  it('falls back to localized defaults when the fields are absent', async () => {
+    const { calls, fx } = capturingButtons();
+    const emailSteps: FlowStep[] = [{ id: 'e1', type: 'collect_email' }];
+
+    await advance(ctx({ steps: emailSteps, currentStepId: 'e1', language: 'tr' }), { type: 'trigger' }, fx);
+
+    expect(calls[0].buttons.map((b) => b.title)).toEqual(['Kabul Et', 'Reddet']);
+  });
+});
