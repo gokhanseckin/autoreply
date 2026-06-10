@@ -29,6 +29,12 @@ describe('ResendAdapter.triggerEvent', () => {
     expect(JSON.parse(init.body)).toEqual({ event: 'welcome', email: 'a@b.com', payload: { plan: 'pro' } });
   });
 
+  it('omits the payload key when no payload is given', async () => {
+    await new ResendAdapter({ apiKey: 'KEY' }).triggerEvent({ email: 'a@b.com', event: 'welcome' });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({ event: 'welcome', email: 'a@b.com' });
+  });
+
   it('throws on a non-ok response', async () => {
     fetchMock.mockResolvedValueOnce({ ok: false, status: 422 });
     await expect(
