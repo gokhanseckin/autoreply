@@ -15,7 +15,7 @@ export async function captureEmail(args: {
   language: 'tr' | 'en';
   emailText: string;
   providerConfig: ProviderConfig;
-}): Promise<{ ok: boolean; status: 'pending' | 'confirmed'; message: string }> {
+}): Promise<{ ok: boolean; status: 'pending' | 'confirmed' | 'failed'; message: string }> {
   const t = args.language === 'tr' ? EMAIL_CONSENT_TR : EMAIL_CONSENT_EN;
   if (!EMAIL_RE.test(args.emailText.trim())) return { ok: false, status: 'pending', message: t.invalidEmail };
 
@@ -43,7 +43,19 @@ export async function captureEmail(args: {
       await db.from('email_subscribers').update({ status: 'confirmed', provider_id: ext.id }).eq('id', sub.id);
     }
     return { ok: true, status: 'confirmed', message: t.confirmation };
-  } catch {
-    return { ok: true, status: 'pending', message: t.fallback };
+  } catch (err) {
+    console.error('[email-step]', JSON.stringify({
+      event: 'provider_subscribe_failed',
+      provider: args.providerConfig.kind,
+      subscriberId: sub?.id ?? null,
+      error: err instanceof Error ? err.message : String(err),
+    }));
+    if (sub) {
+      const { error } = await db.from('email_subscribers').update({ status: 'failed' }).eq('id', sub.id);
+      if (error) console.error('[email-step]', JSON.stringify({ event: 'mark_failed_failed', subscriberId: sub.id, error: error.message }));
+    }
+    // 'failed' (vs invalid-email 'pending') tells the caller this is a
+    // provider outage, not user error — keep the friendly message, don't re-prompt.
+    return { ok: false, status: 'failed', message: t.fallback };
   }
 }

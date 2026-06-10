@@ -292,7 +292,9 @@ async function maybeHandleEmailStep(args: {
     text: captured.message,
   });
 
-  if (!captured.ok) {
+  // Retry only when the user can fix it (invalid email). A provider failure
+  // ('failed') already got the fallback message — advance instead of re-prompting.
+  if (!captured.ok && captured.status !== 'failed') {
     const emailContext = (args.state.context && typeof args.state.context === 'object' && 'email' in args.state.context)
       ? (args.state.context as { email?: { retries?: number } }).email
       : undefined;

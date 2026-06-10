@@ -307,6 +307,44 @@ describe('POST /api/webhooks/meta', () => {
     }));
   });
 
+  it('does not re-prompt for the email when the provider fails — sends the fallback and moves on', async () => {
+    vi.mocked(loadConversationState).mockResolvedValue({
+      contact_id: 'c1',
+      current_flow_id: 'email-flow',
+      current_step_id: 'email1',
+      awaiting_input_type: 'email',
+      context: { email: { stepId: 'email1', retries: 0 } },
+    } as any);
+    dbState.flow = { id: 'email-flow', name: 'Lead flow', language: 'en', steps: [{ id: 'email1', type: 'collect_email' }] };
+    vi.mocked(captureEmail).mockResolvedValue({ ok: false, status: 'failed', message: "Thanks — we'll be in touch." });
+    const body = JSON.stringify({
+      object: 'instagram',
+      entry: [{
+        id: '17841400000000000',
+        time: 1748372160,
+        messaging: [{
+          sender: { id: '8800000000000000' },
+          recipient: { id: '17841400000000000' },
+          timestamp: 1748372160000,
+          message: { mid: 'MID-EMAIL-PROVIDER-DOWN', text: 'person@example.com' },
+        }],
+      }],
+    });
+
+    const res = await POST(signed(body));
+
+    expect(res.status).toBe(200);
+    const { sendText } = await import('@/lib/meta/client');
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining("Thanks — we'll be in touch.") }));
+    // A provider outage is not the user's fault: never ask them to retype the email.
+    expect(saveConversationState).not.toHaveBeenCalledWith(expect.objectContaining({ awaiting_input_type: 'email' }));
+    expect(saveConversationState).toHaveBeenCalledWith(expect.objectContaining({
+      current_flow_id: null,
+      current_step_id: null,
+      awaiting_input_type: null,
+    }));
+  });
+
   it('ignores active-flow webhook messages with no text or postback', async () => {
     vi.mocked(loadConversationState).mockResolvedValue({
       contact_id: 'c1',
