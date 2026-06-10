@@ -18,4 +18,8 @@ export function buildErasureSteps(lang: 'tr' | 'en'): FlowStep[] {
   ];
 }
 
+export function erasureOutcomeText(lang: 'tr' | 'en', outcome: 'execute' | 'cancelled'): string {
+  return outcome === 'execute' ? TEXT[lang].done : TEXT[lang].cancelled;
+}
+
 export const ERASURE_FLOW_ID = '__erasure__';

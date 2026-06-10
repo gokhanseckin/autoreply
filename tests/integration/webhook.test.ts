@@ -480,6 +480,87 @@ describe('POST /api/webhooks/meta', () => {
     }));
   });
 
+  it('executes erasure on the confirm postback and then sends the deletion confirmation', async () => {
+    vi.mocked(loadConversationState).mockResolvedValue({
+      contact_id: 'c1',
+      current_flow_id: null,
+      current_step_id: 'confirm',
+      awaiting_input_type: 'button',
+      context: { erasure: true },
+    } as any);
+    const body = JSON.stringify({
+      object: 'instagram',
+      entry: [{
+        id: '17841400000000000',
+        time: 1748372160,
+        messaging: [{
+          sender: { id: '8800000000000000' },
+          recipient: { id: '17841400000000000' },
+          timestamp: 1748372160000,
+          postback: { mid: 'MID-ERASE-YES', payload: 'execute', title: 'Yes, delete everything' },
+        }],
+      }],
+    });
+
+    const res = await POST(signed(body));
+
+    expect(res.status).toBe(200);
+    const { executeErasure } = await import('@/lib/flow-engine/erasure-execute');
+    expect(executeErasure).toHaveBeenCalledWith({ contactId: 'c1', requestedVia: 'dm' });
+    const { sendText } = await import('@/lib/meta/client');
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({
+      igUserId: '8800000000000000',
+      text: 'Your data has been deleted. ✅',
+    }));
+    // Confirmation must go out only after the erasure RPC has succeeded.
+    expect(vi.mocked(executeErasure).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(sendText).mock.invocationCallOrder[0]);
+    // The contact row is gone after erase_contact(); nothing must be logged against it.
+    expect(logMessage).not.toHaveBeenCalled();
+  });
+
+  it('cancels erasure on the cancel postback: replies and disarms the erasure context', async () => {
+    vi.mocked(loadConversationState).mockResolvedValue({
+      contact_id: 'c1',
+      current_flow_id: null,
+      current_step_id: 'confirm',
+      awaiting_input_type: 'button',
+      context: { erasure: true },
+    } as any);
+    const body = JSON.stringify({
+      object: 'instagram',
+      entry: [{
+        id: '17841400000000000',
+        time: 1748372160,
+        messaging: [{
+          sender: { id: '8800000000000000' },
+          recipient: { id: '17841400000000000' },
+          timestamp: 1748372160000,
+          postback: { mid: 'MID-ERASE-NO', payload: 'cancelled', title: 'Cancel' },
+        }],
+      }],
+    });
+
+    const res = await POST(signed(body));
+
+    expect(res.status).toBe(200);
+    const { executeErasure } = await import('@/lib/flow-engine/erasure-execute');
+    expect(executeErasure).not.toHaveBeenCalled();
+    const { sendText } = await import('@/lib/meta/client');
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({
+      igUserId: '8800000000000000',
+      text: 'Cancelled.',
+    }));
+    // Disarm: a later unrelated 'execute' postback must not be able to wipe the contact.
+    expect(saveConversationState).toHaveBeenCalledWith(expect.objectContaining({
+      contact_id: 'c1',
+      current_flow_id: null,
+      current_step_id: null,
+      awaiting_input_type: null,
+      context: {},
+    }));
+  });
+
   it('ignores echo webhook messages sent by the Instagram account', async () => {
     const body = JSON.stringify({
       object: 'instagram',
