@@ -14,4 +14,13 @@ describe('supabase migrations', () => {
     );
     expect(constraintMigrations.length).toBeGreaterThan(0);
   });
+
+  it('indexes flow_posts(post_id, flow_id) for comment-flow routing', () => {
+    // findCommentFlow joins flow_posts -> flows/posts entering via post_id;
+    // the PK (flow_id, post_id) doesn't serve a post_id-leading lookup.
+    const hasCompositeIndex = migrations.some((m) =>
+      /create index[^;]*on flow_posts\s*\(\s*post_id\s*,\s*flow_id\s*\)/i.test(m.sql),
+    );
+    expect(hasCompositeIndex).toBe(true);
+  });
 });
