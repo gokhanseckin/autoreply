@@ -83,4 +83,44 @@ describe('captureEmail', () => {
     });
     errorSpy.mockRestore();
   });
+
+  it('fires the Resend automation event after a successful subscribe', async () => {
+    const triggerEvent = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(makeProvider).mockResolvedValue({ subscribe: vi.fn().mockResolvedValue({ id: 'ext1' }), triggerEvent } as any);
+
+    const result = await captureEmail({ ...baseArgs, resendEvent: 'welcome' });
+
+    expect(result.status).toBe('confirmed');
+    expect(triggerEvent).toHaveBeenCalledWith({
+      email: 'person@example.com',
+      event: 'welcome',
+      payload: { igUsername: 'test_user', flowName: 'Lead flow' },
+    });
+  });
+
+  it('does not fire an event when no resendEvent is configured', async () => {
+    const triggerEvent = vi.fn();
+    vi.mocked(makeProvider).mockResolvedValue({ subscribe: vi.fn().mockResolvedValue({ id: 'ext1' }), triggerEvent } as any);
+
+    await captureEmail(baseArgs);
+
+    expect(triggerEvent).not.toHaveBeenCalled();
+  });
+
+  it('keeps the capture confirmed even if the automation trigger fails', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const triggerEvent = vi.fn().mockRejectedValue(new Error('events/send 500'));
+    vi.mocked(makeProvider).mockResolvedValue({ subscribe: vi.fn().mockResolvedValue({ id: 'ext1' }), triggerEvent } as any);
+
+    const result = await captureEmail({ ...baseArgs, resendEvent: 'welcome' });
+
+    expect(result).toEqual({ ok: true, status: 'confirmed', message: expect.stringContaining('Bonus sent') });
+    expect(dbCalls.updates).toContainEqual({
+      table: 'email_subscribers',
+      values: expect.objectContaining({ status: 'confirmed', provider_id: 'ext1' }),
+    });
+    const log = errorSpy.mock.calls.map(([, payload]) => String(payload)).join('\n');
+    expect(log).toContain('events/send 500');
+    errorSpy.mockRestore();
+  });
 });

@@ -1,7 +1,6 @@
 import type { FlowStep } from './schema';
 import { appendPrivacyFooter } from '@/lib/consent/footer';
-import { EMAIL_CONSENT_TR } from '@/lib/consent/email-consent-text.tr';
-import { EMAIL_CONSENT_EN } from '@/lib/consent/email-consent-text.en';
+import { resolveCollectEmailText } from '@/lib/consent/collect-email-step-text';
 import { CURRENT_POLICY_VERSION } from '@/lib/consent/policy-versions';
 
 export type Lang = 'tr' | 'en';
@@ -43,7 +42,6 @@ export type AdvanceResult = {
   expiresAt: string | null;
 };
 
-const consentText = (lang: Lang) => (lang === 'tr' ? EMAIL_CONSENT_TR : EMAIL_CONSENT_EN);
 
 function findStep(ctx: FlowContext, id: string): FlowStep {
   const step = ctx.steps.find((s) => s.id === id);
@@ -152,13 +150,14 @@ export async function advance(ctx: FlowContext, event: Event, effects: Effects):
     }
 
     if (step.type === 'collect_email') {
-      const ct = consentText(ctx.language);
+      const ct = resolveCollectEmailText(step, ctx.language);
       const sent = await effects.sendButtons({
         token: ctx.pageAccessToken,
         igUserId: ctx.igUserId,
-        text: appendPrivacyFooter(ct.body, ctx.language),
+        // The consent disclaimer always carries the privacy/KVKK footer.
+        text: appendPrivacyFooter(ct.disclaimer, ctx.language),
         buttons: [
-          { type: 'postback', title: ct.agree, payload: `EMAIL_AGREE_${step.id}` },
+          { type: 'postback', title: ct.accept, payload: `EMAIL_AGREE_${step.id}` },
           { type: 'postback', title: ct.decline, payload: `EMAIL_DECLINE_${step.id}` },
         ],
         commentId: consumeCommentId(),

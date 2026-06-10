@@ -263,7 +263,7 @@ describe('POST /api/webhooks/meta', () => {
     const { sendText } = await import('@/lib/meta/client');
     expect(sendText).toHaveBeenCalledWith(expect.objectContaining({
       igUserId: '8800000000000000',
-      text: 'Please type your email address in this chat.',
+      text: 'Please enter your email',
     }));
   });
 
@@ -624,6 +624,101 @@ describe('POST /api/webhooks/meta', () => {
       awaiting_input_type: null,
       context: {},
     }));
+  });
+
+  it('sends the custom request message after the user agrees', async () => {
+    vi.mocked(loadConversationState).mockResolvedValue({
+      contact_id: 'c1', current_flow_id: 'email-flow', current_step_id: 'email1',
+      awaiting_input_type: 'button', context: {},
+    } as any);
+    dbState.flow = { id: 'email-flow', name: 'Lead flow', language: 'en', steps: [{ id: 'email1', type: 'collect_email', request_message: 'Drop your best email below' }] };
+    const body = JSON.stringify({
+      object: 'instagram',
+      entry: [{ id: '17841400000000000', time: 1748372160, messaging: [{
+        sender: { id: '8800000000000000' }, recipient: { id: '17841400000000000' }, timestamp: 1748372160000,
+        postback: { mid: 'MID-AGREE-CUSTOM', payload: 'EMAIL_AGREE_email1', title: 'Accept' },
+      }] }],
+    });
+
+    const res = await POST(signed(body));
+
+    expect(res.status).toBe(200);
+    const { sendText } = await import('@/lib/meta/client');
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: 'Drop your best email below' }));
+  });
+
+  it('ends the flow with the goodbye message when the user declines', async () => {
+    vi.mocked(loadConversationState).mockResolvedValue({
+      contact_id: 'c1', current_flow_id: 'email-flow', current_step_id: 'email1',
+      awaiting_input_type: 'button', context: {},
+    } as any);
+    // next_id is set so the OLD behavior would advance to s2; the new behavior must end instead.
+    dbState.flow = { id: 'email-flow', name: 'Lead flow', language: 'en', steps: [
+      { id: 'email1', type: 'collect_email', next_id: 's2' },
+      { id: 's2', type: 'send_message', text: 'should not run' },
+    ] };
+    const body = JSON.stringify({
+      object: 'instagram',
+      entry: [{ id: '17841400000000000', time: 1748372160, messaging: [{
+        sender: { id: '8800000000000000' }, recipient: { id: '17841400000000000' }, timestamp: 1748372160000,
+        postback: { mid: 'MID-DECLINE', payload: 'EMAIL_DECLINE_email1', title: 'Decline' },
+      }] }],
+    });
+
+    const res = await POST(signed(body));
+
+    expect(res.status).toBe(200);
+    const { sendText } = await import('@/lib/meta/client');
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: 'No problem.' }));
+    expect(sendText).not.toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('should not run') }));
+    expect(saveConversationState).toHaveBeenCalledWith(expect.objectContaining({
+      current_flow_id: null, current_step_id: null, awaiting_input_type: null,
+    }));
+  });
+
+  it('lets a decline postback end the flow even while awaiting the email text', async () => {
+    vi.mocked(loadConversationState).mockResolvedValue({
+      contact_id: 'c1', current_flow_id: 'email-flow', current_step_id: 'email1',
+      awaiting_input_type: 'email', context: { email: { stepId: 'email1', retries: 0 } },
+    } as any);
+    dbState.flow = { id: 'email-flow', name: 'Lead flow', language: 'en', steps: [{ id: 'email1', type: 'collect_email' }] };
+    const body = JSON.stringify({
+      object: 'instagram',
+      entry: [{ id: '17841400000000000', time: 1748372160, messaging: [{
+        sender: { id: '8800000000000000' }, recipient: { id: '17841400000000000' }, timestamp: 1748372160000,
+        postback: { mid: 'MID-DECLINE-LATE', payload: 'EMAIL_DECLINE_email1', title: 'Decline' },
+      }] }],
+    });
+
+    const res = await POST(signed(body));
+
+    expect(res.status).toBe(200);
+    expect(captureEmail).not.toHaveBeenCalled();
+    const { sendText } = await import('@/lib/meta/client');
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: 'No problem.' }));
+    expect(saveConversationState).toHaveBeenCalledWith(expect.objectContaining({
+      current_flow_id: null, current_step_id: null, awaiting_input_type: null,
+    }));
+  });
+
+  it('forwards the configured Resend event to captureEmail', async () => {
+    vi.mocked(loadConversationState).mockResolvedValue({
+      contact_id: 'c1', current_flow_id: 'email-flow', current_step_id: 'email1',
+      awaiting_input_type: 'email', context: { email: { stepId: 'email1', retries: 0 } },
+    } as any);
+    dbState.flow = { id: 'email-flow', name: 'Lead flow', language: 'en', steps: [{ id: 'email1', type: 'collect_email', resend_event: 'welcome' }] };
+    const body = JSON.stringify({
+      object: 'instagram',
+      entry: [{ id: '17841400000000000', time: 1748372160, messaging: [{
+        sender: { id: '8800000000000000' }, recipient: { id: '17841400000000000' }, timestamp: 1748372160000,
+        message: { mid: 'MID-EMAIL-WITH-EVENT', text: 'person@example.com' },
+      }] }],
+    });
+
+    const res = await POST(signed(body));
+
+    expect(res.status).toBe(200);
+    expect(captureEmail).toHaveBeenCalledWith(expect.objectContaining({ resendEvent: 'welcome' }));
   });
 
   it('ignores echo webhook messages sent by the Instagram account', async () => {

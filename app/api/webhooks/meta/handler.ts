@@ -14,8 +14,7 @@ import { FlowStepsSchema, type FlowStep } from '@/lib/flow-engine/schema';
 import { CURRENT_POLICY_VERSION } from '@/lib/consent/policy-versions';
 import { appendPrivacyFooter } from '@/lib/consent/footer';
 import { captureEmail } from '@/lib/flow-engine/email-step';
-import { EMAIL_CONSENT_EN } from '@/lib/consent/email-consent-text.en';
-import { EMAIL_CONSENT_TR } from '@/lib/consent/email-consent-text.tr';
+import { resolveCollectEmailText } from '@/lib/consent/collect-email-step-text';
 import type { ProviderConfig } from '@/lib/email-providers/factory';
 import type { Json } from '@/lib/db/types';
 
@@ -146,10 +145,6 @@ function providerConfigFrom(value: unknown): ProviderConfig {
   return { kind: 'none' };
 }
 
-function emailConsentText(lang: Lang) {
-  return lang === 'tr' ? EMAIL_CONSENT_TR : EMAIL_CONSENT_EN;
-}
-
 async function advanceFromNext(args: {
   step: Extract<FlowStep, { type: 'collect_email' | 'send_message' }>;
   steps: FlowStep[];
@@ -238,25 +233,25 @@ async function maybeHandleEmailStep(args: {
       igAccountId: args.account.id,
       contactId: args.contact.id,
       language,
-      text: emailConsentText(language).prompt,
+      text: resolveCollectEmailText(step, language).request,
       appendFooter: false,
     });
     return true;
   }
 
   if (args.event.postback?.payload === `EMAIL_DECLINE_${step.id}`) {
-    const result = await advanceFromNext({
-      step,
-      steps,
-      language,
-      contactId: args.contact.id,
-      igAccountId: args.account.id,
-      flowId: args.flow.id,
-      pageAccessToken: args.token,
+    // Decline ends the flow: send the editable goodbye, then clear state.
+    // (No advance to next_id — declining is a terminal choice.)
+    await sendTextWithLog({
+      token: args.token,
       igUserId: args.igUserId,
-      effects: args.effects,
+      igAccountId: args.account.id,
+      contactId: args.contact.id,
+      language,
+      text: resolveCollectEmailText(step, language).declineGoodbye,
+      appendFooter: false,
     });
-    await saveFlowResult(args.contact.id, args.flow.id, result);
+    await saveFlowResult(args.contact.id, args.flow.id, completed());
     return true;
   }
 
@@ -282,6 +277,7 @@ async function maybeHandleEmailStep(args: {
     language,
     emailText: args.event.text,
     providerConfig: providerConfigFrom(args.account.email_provider_config),
+    resendEvent: step.resend_event,
   });
   await sendTextWithLog({
     token: args.token,

@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { saveFlowBuilderSteps, saveFlowSteps } from '../actions';
+import { useEffect, useState } from 'react';
+import { saveFlowBuilderSteps, saveFlowSteps, listResendEvents } from '../actions';
 import type { FlowStep } from '@/lib/flow-engine/schema';
 import {
   createChoiceStep,
@@ -14,6 +14,7 @@ import {
   toGuidedSteps,
   type GuidedFlowStep,
 } from './flow-builder-model';
+import { collectEmailDefaults } from '@/lib/consent/collect-email-step-text';
 
 type Mode = 'guided' | 'advanced';
 type MessageStep = Extract<FlowStep, { type: 'send_message' }>;
@@ -47,7 +48,19 @@ function defaultNextTarget(steps: GuidedFlowStep[], currentId: string) {
   return targetOptions(steps, currentId)[0]?.id;
 }
 
-export function StepsEditor({ flowId, initialSteps }: { flowId: string; initialSteps: unknown[] }) {
+export function StepsEditor({
+  flowId,
+  initialSteps,
+  language,
+  accountId,
+  providerKind,
+}: {
+  flowId: string;
+  initialSteps: unknown[];
+  language: 'tr' | 'en';
+  accountId: string;
+  providerKind: string;
+}) {
   const normalizedInitialSteps = toGuidedSteps(initialSteps);
   const initialGuided = normalizedInitialSteps !== null;
   const [mode, setMode] = useState<Mode>(initialGuided ? 'guided' : 'advanced');
@@ -75,7 +88,7 @@ export function StepsEditor({ flowId, initialSteps }: { flowId: string; initialS
               : kind === 'link'
                 ? createLinkStep(index)
                 : kind === 'email'
-                  ? createEmailStep(index)
+                  ? createEmailStep(index, language)
                   : createEndStep(index);
       return [...current, { ...step, id }];
     });
@@ -256,7 +269,16 @@ export function StepsEditor({ flowId, initialSteps }: { flowId: string; initialS
                       <LinkFields step={step} steps={steps} index={index} patchStep={patchStep} setNext={setNext} />
                     )}
                     {step.type === 'collect_email' && (
-                      <NextSelector step={step} steps={steps} index={index} setNext={setNext} />
+                      <EmailFields
+                        step={step}
+                        steps={steps}
+                        index={index}
+                        patchStep={patchStep}
+                        setNext={setNext}
+                        language={language}
+                        accountId={accountId}
+                        providerKind={providerKind}
+                      />
                     )}
                     {step.type === 'end' && (
                       <p className="text-sm text-gray-500">Conversation ends here.</p>
@@ -479,6 +501,134 @@ function LinkFields({
           <input value={step.destination_url} onChange={(e) => patchStep(index, { destination_url: e.target.value })} className="border px-2 py-2" />
         </label>
       </div>
+      <NextSelector step={step} steps={steps} index={index} setNext={setNext} />
+    </>
+  );
+}
+
+function EmailFields({
+  step,
+  steps,
+  index,
+  patchStep,
+  setNext,
+  language,
+  accountId,
+  providerKind,
+}: {
+  step: EmailStep;
+  steps: GuidedFlowStep[];
+  index: number;
+  patchStep: (index: number, patch: Partial<GuidedFlowStep>) => void;
+  setNext: (index: number, nextId: string) => void;
+  language: 'tr' | 'en';
+  accountId: string;
+  providerKind: string;
+}) {
+  const d = collectEmailDefaults(language);
+  const [events, setEvents] = useState<{ id: string; name: string }[]>([]);
+  const [eventsError, setEventsError] = useState<string | null>(null);
+  const [loadingEvents, setLoadingEvents] = useState(false);
+
+  useEffect(() => {
+    if (providerKind !== 'resend') return;
+    let active = true;
+    setLoadingEvents(true);
+    setEventsError(null);
+    listResendEvents(accountId)
+      .then((r) => {
+        if (!active) return;
+        if (r.ok) setEvents(r.events);
+        else setEventsError(r.error);
+      })
+      .catch((e) => { if (active) setEventsError((e as Error).message); })
+      .finally(() => { if (active) setLoadingEvents(false); });
+    return () => { active = false; };
+  }, [accountId, providerKind]);
+
+  const selectedKnown = !step.resend_event || events.some((e) => e.name === step.resend_event);
+
+  return (
+    <>
+      <label className="grid gap-1 text-sm">
+        <span className="text-xs font-medium text-gray-500">Disclaimer / consent message</span>
+        <textarea
+          value={step.disclaimer_message ?? ''}
+          onChange={(e) => patchStep(index, { disclaimer_message: e.target.value })}
+          placeholder={d.disclaimer}
+          className="min-h-24 border p-2"
+        />
+        <span className="text-xs text-gray-400">The privacy/KVKK footer is always appended below this automatically.</span>
+        <span className="text-xs text-gray-400">Leave a field blank to send the localized default (shown as placeholder).</span>
+      </label>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <label className="grid gap-1 text-sm">
+          <span className="text-xs font-medium text-gray-500">Accept button</span>
+          <input
+            value={step.accept_label ?? ''}
+            onChange={(e) => patchStep(index, { accept_label: e.target.value })}
+            placeholder={d.accept}
+            maxLength={20}
+            className="border px-2 py-2"
+          />
+        </label>
+        <label className="grid gap-1 text-sm">
+          <span className="text-xs font-medium text-gray-500">Decline button</span>
+          <input
+            value={step.decline_label ?? ''}
+            onChange={(e) => patchStep(index, { decline_label: e.target.value })}
+            placeholder={d.decline}
+            maxLength={20}
+            className="border px-2 py-2"
+          />
+        </label>
+      </div>
+
+      <label className="grid gap-1 text-sm">
+        <span className="text-xs font-medium text-gray-500">Email request message (sent after Accept)</span>
+        <input
+          value={step.request_message ?? ''}
+          onChange={(e) => patchStep(index, { request_message: e.target.value })}
+          placeholder={d.request}
+          className="border px-2 py-2"
+        />
+      </label>
+
+      <label className="grid gap-1 text-sm">
+        <span className="text-xs font-medium text-gray-500">Decline message (sent before the flow ends)</span>
+        <input
+          value={step.decline_message ?? ''}
+          onChange={(e) => patchStep(index, { decline_message: e.target.value })}
+          placeholder={d.declineGoodbye}
+          className="border px-2 py-2"
+        />
+      </label>
+
+      {providerKind === 'resend' && (
+        <label className="grid gap-1 text-sm">
+          <span className="text-xs font-medium text-gray-500">Resend automation event</span>
+          <select
+            value={step.resend_event ?? ''}
+            onChange={(e) => patchStep(index, { resend_event: e.target.value || undefined })}
+            className="border px-2 py-2"
+          >
+            <option value="">No automation</option>
+            {events.map((ev) => (
+              <option key={ev.id} value={ev.name}>{ev.name}</option>
+            ))}
+            {!selectedKnown && step.resend_event && (
+              <option value={step.resend_event}>{step.resend_event}</option>
+            )}
+          </select>
+          {loadingEvents && <span className="text-xs text-gray-400">Loading events…</span>}
+          {eventsError && <span className="text-xs text-red-600">Could not load events: {eventsError}</span>}
+          {!loadingEvents && !eventsError && events.length === 0 && (
+            <span className="text-xs text-gray-400">No events found in Resend — create one in the Resend dashboard first.</span>
+          )}
+        </label>
+      )}
+
       <NextSelector step={step} steps={steps} index={index} setNext={setNext} />
     </>
   );

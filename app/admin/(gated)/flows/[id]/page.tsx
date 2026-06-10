@@ -15,16 +15,27 @@ function accountName(value: unknown): string | null {
   return null;
 }
 
+function accountProviderKind(value: unknown): string {
+  const rel = Array.isArray(value) ? value[0] : value;
+  const cfg = rel && typeof rel === 'object' ? (rel as { email_provider_config?: unknown }).email_provider_config : null;
+  if (cfg && typeof cfg === 'object' && 'kind' in cfg) {
+    const kind = (cfg as { kind?: unknown }).kind;
+    return typeof kind === 'string' ? kind : 'none';
+  }
+  return 'none';
+}
+
 export default async function EditFlow({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const db = serviceClient();
   const { data: flow } = await db
     .from('flows')
-    .select('*, ig_accounts(name)')
+    .select('*, ig_accounts(name, email_provider_config)')
     .eq('id', id)
     .maybeSingle();
   if (!flow) notFound();
   const account = accountName((flow as { ig_accounts?: unknown }).ig_accounts);
+  const providerKind = accountProviderKind((flow as { ig_accounts?: unknown }).ig_accounts);
   const saveSettings = saveFlowSettings.bind(null, flow.id);
   const toggleArchived = setFlowArchived.bind(null, flow.id, !flow.archived);
   // Key the settings form to its saved values: after a server-action save the
@@ -81,7 +92,13 @@ export default async function EditFlow({ params }: { params: Promise<{ id: strin
           <button className="bg-black px-3 py-2 text-sm text-white">Save settings</button>
         </div>
       </form>
-      <StepsEditor flowId={flow.id} initialSteps={(flow.steps ?? []) as any[]} />
+      <StepsEditor
+        flowId={flow.id}
+        initialSteps={(flow.steps ?? []) as any[]}
+        language={(flow.language === 'en' ? 'en' : 'tr')}
+        accountId={flow.ig_account_id}
+        providerKind={providerKind}
+      />
     </section>
   );
 }

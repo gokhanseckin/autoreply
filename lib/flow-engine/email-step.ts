@@ -15,6 +15,7 @@ export async function captureEmail(args: {
   language: 'tr' | 'en';
   emailText: string;
   providerConfig: ProviderConfig;
+  resendEvent?: string;
 }): Promise<{ ok: boolean; status: 'pending' | 'confirmed' | 'failed'; message: string }> {
   const t = args.language === 'tr' ? EMAIL_CONSENT_TR : EMAIL_CONSENT_EN;
   if (!EMAIL_RE.test(args.emailText.trim())) return { ok: false, status: 'pending', message: t.invalidEmail };
@@ -41,6 +42,25 @@ export async function captureEmail(args: {
     });
     if (sub) {
       await db.from('email_subscribers').update({ status: 'confirmed', provider_id: ext.id }).eq('id', sub.id);
+    }
+    // The email is already captured (in the audience). Triggering the
+    // automation is best-effort: a failure here must NOT mark the row failed
+    // or re-prompt the user, so swallow + log it separately.
+    if (args.resendEvent && typeof adapter.triggerEvent === 'function') {
+      try {
+        await adapter.triggerEvent({
+          email: args.emailText.trim(),
+          event: args.resendEvent,
+          payload: { igUsername: args.igUsername ?? '', flowName: args.flowName },
+        });
+      } catch (err) {
+        console.error('[email-step]', JSON.stringify({
+          event: 'trigger_event_failed',
+          subscriberId: sub?.id ?? null,
+          resendEvent: args.resendEvent,
+          error: err instanceof Error ? err.message : String(err),
+        }));
+      }
     }
     return { ok: true, status: 'confirmed', message: t.confirmation };
   } catch (err) {

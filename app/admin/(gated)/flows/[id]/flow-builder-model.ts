@@ -1,4 +1,5 @@
 import { FlowStepsSchema, type FlowStep } from '@/lib/flow-engine/schema';
+import { collectEmailDefaults } from '@/lib/consent/collect-email-step-text';
 
 const GUIDED_TYPES = new Set(['send_message', 'send_link', 'collect_email', 'end']);
 
@@ -100,10 +101,16 @@ export function createLinkStep(index: number): GuidedFlowStep {
   };
 }
 
-export function createEmailStep(index: number): GuidedFlowStep {
+export function createEmailStep(index: number, language: 'tr' | 'en' = 'tr'): GuidedFlowStep {
+  const d = collectEmailDefaults(language);
   return {
     id: `s${index}`,
     type: 'collect_email',
+    disclaimer_message: d.disclaimer,
+    accept_label: d.accept,
+    decline_label: d.decline,
+    request_message: d.request,
+    decline_message: d.declineGoodbye,
   };
 }
 

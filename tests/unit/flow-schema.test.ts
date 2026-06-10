@@ -50,4 +50,33 @@ describe('FlowStepsSchema', () => {
     expect(FlowStepsSchema.safeParse(steps('javascript:alert(1)')).success).toBe(false);
     expect(FlowStepsSchema.safeParse(steps('https://example.com')).success).toBe(true);
   });
+
+  it('accepts a minimal collect_email step (back-compat)', () => {
+    expect(FlowStepsSchema.safeParse([{ id: 'e1', type: 'collect_email' }]).success).toBe(true);
+  });
+
+  it('accepts a collect_email step with editable text fields and a resend event', () => {
+    const step = [{
+      id: 'e1',
+      type: 'collect_email',
+      next_id: 's2',
+      disclaimer_message: 'Confirm to get your bonus by email.',
+      accept_label: 'Kabul Et',
+      decline_label: 'Reddet',
+      request_message: 'Lütfen email adresinizi girin',
+      decline_message: 'Tamam, sorun değil.',
+      resend_event: 'welcome',
+    }];
+    expect(FlowStepsSchema.safeParse(step).success).toBe(true);
+    const parsed = FlowStepsSchema.parse(step);
+    const emailStep = parsed[0];
+    if (emailStep.type !== 'collect_email') throw new Error('unexpected type');
+    expect(emailStep.resend_event).toBe('welcome');
+  });
+
+  it('caps collect_email button labels at 20 characters', () => {
+    const step = (accept_label: string) => [{ id: 'e1', type: 'collect_email', accept_label }];
+    expect(FlowStepsSchema.safeParse(step('a'.repeat(21))).success).toBe(false);
+    expect(FlowStepsSchema.safeParse(step('a'.repeat(20))).success).toBe(true);
+  });
 });

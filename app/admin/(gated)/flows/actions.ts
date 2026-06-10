@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { FlowStepsSchema } from '@/lib/flow-engine/schema';
 import { isAdminRequest, requireAdmin, UNAUTHORIZED_MESSAGE } from '@/lib/auth/require-admin';
+import { decryptSecret } from '@/lib/db/encryption';
 
 const LANGUAGES = new Set(['tr', 'en']);
 const TRIGGER_TYPES = new Set(['comment', 'dm', 'story_reply']);
@@ -27,6 +28,7 @@ function revalidateFlowAdmin(flowId?: string) {
 function formatFlowStepIssues(issues: { path: PropertyKey[]; message: string }[]): string {
   const messages = issues.map((issue) => {
     const field = String(issue.path.at(-1) ?? '');
+    if (field === 'accept_label' || field === 'decline_label') return 'Button labels must be 20 characters or fewer.';
     if (field === 'label') return 'Label must be 20 characters or fewer.';
     if (field === 'destination_url' || field === 'url') return 'Destination URL must be a valid link starting with http:// or https://.';
     if (field === 'text') return 'Message text is required.';
@@ -150,4 +152,42 @@ export async function setFlowArchived(flowId: string, archived: boolean) {
   if (error) throw error;
 
   revalidateFlowAdmin(flowId);
+}
+
+type ResendEvent = { id: string; name: string };
+type ListEventsResult = { ok: true; events: ResendEvent[] } | { ok: false; error: string };
+
+// Populates the admin "Resend automation event" dropdown. Reads the account's
+// encrypted Resend key, then calls Resend's List Events API. Returns an empty
+// list (not an error) when the account isn't configured for Resend.
+export async function listResendEvents(accountId: string): Promise<ListEventsResult> {
+  if (!(await isAdminRequest())) return { ok: false, error: UNAUTHORIZED_MESSAGE };
+  const db = serviceClient();
+  const { data: account, error } = await db
+    .from('ig_accounts')
+    .select('email_provider_config')
+    .eq('id', accountId)
+    .maybeSingle();
+  if (error) return { ok: false, error: `DB error: ${error.message}` };
+
+  const cfg = (account as { email_provider_config?: unknown } | null)
+    ?.email_provider_config as { kind?: string; api_key_enc?: string } | null;
+  if (!cfg || cfg.kind !== 'resend' || typeof cfg.api_key_enc !== 'string') {
+    return { ok: true, events: [] };
+  }
+
+  try {
+    const apiKey = await decryptSecret(new Uint8Array(Buffer.from(cfg.api_key_enc, 'base64')));
+    const res = await fetch('https://api.resend.com/events', {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    if (!res.ok) return { ok: false, error: `Resend ${res.status}` };
+    const json = await res.json();
+    const events: ResendEvent[] = Array.isArray(json?.data)
+      ? json.data.map((e: { id: unknown; name: unknown }) => ({ id: String(e.id), name: String(e.name) }))
+      : [];
+    return { ok: true, events };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Unknown error' };
+  }
 }
