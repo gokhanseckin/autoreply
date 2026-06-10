@@ -69,6 +69,8 @@ describe('FlowStepsSchema', () => {
     }];
     expect(FlowStepsSchema.safeParse(step).success).toBe(true);
     const parsed = FlowStepsSchema.parse(step);
-    expect(parsed[0].resend_event).toBe('welcome');
+    const emailStep = parsed[0];
+    if (emailStep.type !== 'collect_email') throw new Error('unexpected type');
+    expect(emailStep.resend_event).toBe('welcome');
   });
 });
