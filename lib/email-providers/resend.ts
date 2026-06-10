@@ -18,4 +18,12 @@ export class ResendAdapter implements EmailProviderAdapter {
     const json = await res.json();
     return { id: json.data?.id ?? 'unknown' };
   }
+  async triggerEvent(input: { email: string; event: string; payload?: Record<string, unknown> }): Promise<void> {
+    const res = await fetch('https://api.resend.com/events/send', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.opts.apiKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ event: input.event, email: input.email, payload: input.payload ?? {} }),
+    });
+    if (!res.ok) throw new Error(`Resend events/send ${res.status}`);
+  }
 }
