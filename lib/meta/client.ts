@@ -2,6 +2,10 @@
 // For legacy Page-based flow (EAAG tokens) use graph.facebook.com/v21.0 instead.
 const GRAPH = 'https://graph.instagram.com/v23.0';
 
+// Webhook handlers must answer Meta quickly; a hung Graph call would hold the
+// function open until the platform limit and trigger webhook redelivery.
+const TIMEOUT_MS = 8000;
+
 type MetaError = { code: number; type: string; message: string; fbtrace_id?: string };
 export class MetaAPIError extends Error {
   constructor(public status: number, public payload: MetaError) {
@@ -18,6 +22,7 @@ async function call(token: string, path: string, body: unknown) {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(TIMEOUT_MS),
   });
   const text = await res.text();
   if (!res.ok) {
@@ -89,6 +94,7 @@ export const WEBHOOK_SUBSCRIBED_FIELDS = [
 export async function getMe(token: string): Promise<MeProfile> {
   const res = await fetch(`${GRAPH}/me?fields=id,user_id,username`, {
     headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(TIMEOUT_MS),
   });
   const text = await res.text();
   if (!res.ok) {
@@ -103,7 +109,7 @@ export async function subscribeToAppWebhooks(token: string): Promise<WebhookSubs
   const fields = WEBHOOK_SUBSCRIBED_FIELDS.join(',');
   const res = await fetch(
     `${GRAPH}/me/subscribed_apps?subscribed_fields=${encodeURIComponent(fields)}&access_token=${encodeURIComponent(token)}`,
-    { method: 'POST' },
+    { method: 'POST', signal: AbortSignal.timeout(TIMEOUT_MS) },
   );
   const text = await res.text();
   if (!res.ok) {
