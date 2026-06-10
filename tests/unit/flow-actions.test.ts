@@ -15,6 +15,13 @@ vi.mock('next/navigation', () => ({
   redirect: vi.fn(),
 }));
 
+// Auth wiring is covered by action-auth.test.ts; here the caller is an admin.
+vi.mock('@/lib/auth/require-admin', () => ({
+  isAdminRequest: vi.fn().mockResolvedValue(true),
+  requireAdmin: vi.fn().mockResolvedValue(undefined),
+  UNAUTHORIZED_MESSAGE: 'Unauthorized',
+}));
+
 vi.mock('@/lib/db/client', () => ({
   serviceClient: () => ({
     from: (table: string) => {
