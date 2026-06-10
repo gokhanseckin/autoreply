@@ -126,7 +126,7 @@ describe('flow admin actions', () => {
       error: expect.stringContaining('Label must be 20 characters or fewer'),
     }));
     expect(result).toEqual(expect.objectContaining({
-      error: expect.stringContaining('Destination URL must be a valid URL'),
+      error: expect.stringContaining('Destination URL must be a valid link starting with http:// or https://'),
     }));
     expect(state.updates).toEqual([]);
   });

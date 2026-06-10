@@ -3,7 +3,7 @@ import { MetaWebhookSchema, CommentValue, MessagingMessage, isStoryComment } fro
 import { matchesErasureKeyword } from '@/lib/flow-engine/reserved-keywords';
 import { findCommentFlow, findDmFlow, findStoryReplyFlow } from '@/lib/flow-engine/routing';
 import { advance, type AdvanceResult, type Effects, type Lang } from '@/lib/flow-engine/machine';
-import { buildErasureSteps, ERASURE_FLOW_ID } from '@/lib/flow-engine/erasure-flow';
+import { buildErasureSteps, erasureOutcomeText, ERASURE_FLOW_ID } from '@/lib/flow-engine/erasure-flow';
 import { executeErasure } from '@/lib/flow-engine/erasure-execute';
 import { findIgAccountByBusinessId, upsertContact, loadConversationState, saveConversationState, alreadyProcessed, claimInboundMessage, logMessage } from '@/lib/db/queries';
 import { decryptSecret, decodeBytea } from '@/lib/db/encryption';
@@ -292,7 +292,9 @@ async function maybeHandleEmailStep(args: {
     text: captured.message,
   });
 
-  if (!captured.ok) {
+  // Retry only when the user can fix it (invalid email). A provider failure
+  // ('failed') already got the fallback message — advance instead of re-prompting.
+  if (!captured.ok && captured.status !== 'failed') {
     const emailContext = (args.state.context && typeof args.state.context === 'object' && 'email' in args.state.context)
       ? (args.state.context as { email?: { retries?: number } }).email
       : undefined;
@@ -463,15 +465,37 @@ async function processMessagingEvent(entryId: string, m: z.infer<typeof Messagin
     awaitingInputType: state?.awaiting_input_type ?? null,
   });
   if (state?.context && (state.context as any).erasure && m.postback) {
+    const erasureLang = account.default_language as Lang;
     if (m.postback.payload === 'execute') {
+      // Confirm only after the RPC succeeds, and without logMessage:
+      // erase_contact() deletes the contact row, so logging the outbound
+      // message would both violate the FK and recreate data just erased.
       await executeErasure({ contactId: contact.id, requestedVia: 'dm' });
+      await sendText({ pageAccessToken: token, igUserId: m.sender.id, text: erasureOutcomeText(erasureLang, 'execute') });
+      logWebhookDecision('erasure_executed', { contactId: shortId(contact.id) });
+      return;
+    }
+    if (m.postback.payload === 'cancelled') {
+      await sendTextWithLog({
+        token,
+        igUserId: m.sender.id,
+        igAccountId: account.id,
+        contactId: contact.id,
+        language: erasureLang,
+        text: erasureOutcomeText(erasureLang, 'cancelled'),
+        appendFooter: false,
+      });
+      // Disarm so a later postback whose payload happens to be 'execute'
+      // (e.g. a step id from an unrelated flow) cannot trigger erasure.
+      await saveConversationState({ contact_id: contact.id, current_flow_id: null, current_step_id: null, awaiting_input_type: null, expires_at: null, context: {} });
+      logWebhookDecision('erasure_cancelled', { contactId: shortId(contact.id) });
       return;
     }
   }
 
   if (state?.current_flow_id) {
     const flow = await serviceClient().from('flows').select('*').eq('id', state.current_flow_id).maybeSingle();
-    logWebhookDecision('active_flow_lookup', { flowId: shortId(state.current_flow_id), found: !!flow.data });
+    logWebhookDecision('active_flow_lookup', { flowId: shortId(state.current_flow_id), found: !!flow.data, error: flow.error?.message ?? null });
     if (flow.data) {
       const effects = buildEffects(token, account.id, contact.id);
       const handledEmail = await maybeHandleEmailStep({

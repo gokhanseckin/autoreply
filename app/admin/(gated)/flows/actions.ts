@@ -28,7 +28,7 @@ function formatFlowStepIssues(issues: { path: PropertyKey[]; message: string }[]
   const messages = issues.map((issue) => {
     const field = String(issue.path.at(-1) ?? '');
     if (field === 'label') return 'Label must be 20 characters or fewer.';
-    if (field === 'destination_url' || field === 'url') return 'Destination URL must be a valid URL.';
+    if (field === 'destination_url' || field === 'url') return 'Destination URL must be a valid link starting with http:// or https://.';
     if (field === 'text') return 'Message text is required.';
     if (field === 'id') return 'Each block needs an internal id.';
     if (field === 'buttons') return 'A message can have at most 3 buttons.';

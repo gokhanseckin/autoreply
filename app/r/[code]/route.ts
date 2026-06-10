@@ -12,6 +12,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     .maybeSingle() as any;
   if (error || !data) return new NextResponse('not found', { status: 404 });
 
+  // Defense in depth: the flow schema only admits http(s) URLs, but never
+  // redirect to anything else even if a bad row reaches the table.
+  const destination: string = data.links.destination_url;
+  if (!/^https?:\/\//i.test(destination)) {
+    console.error('[redirect]', JSON.stringify({ event: 'unsafe_destination_blocked', code }));
+    return new NextResponse('not found', { status: 404 });
+  }
+
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? '0.0.0.0';
   const ua = req.headers.get('user-agent') ?? '';
   try {
@@ -20,8 +28,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     if (!data.first_clicked_at) {
       await db.from('link_codes').update({ first_clicked_at: new Date().toISOString() }).eq('id', data.id);
     }
-  } catch {
-    // best-effort logging
+  } catch (err) {
+    // Click tracking must not block the redirect, but its failures are real signal.
+    console.error('[redirect]', JSON.stringify({ event: 'click_tracking_failed', code, error: err instanceof Error ? err.message : String(err) }));
   }
-  return NextResponse.redirect(data.links.destination_url, 302);
+  return NextResponse.redirect(destination, 302);
 }

@@ -11,6 +11,7 @@ import { captureEmail } from '@/lib/flow-engine/email-step';
 
 const dbState = vi.hoisted(() => ({
   flow: null as any,
+  flowError: null as any,
   inserts: [] as { table: string; row: unknown }[],
 }));
 
@@ -44,7 +45,7 @@ vi.mock('@/lib/db/client', () => ({
       const builder: any = {
         select: () => builder,
         eq: () => builder,
-        maybeSingle: async () => ({ data: table === 'flows' ? dbState.flow : null, error: null }),
+        maybeSingle: async () => ({ data: table === 'flows' ? dbState.flow : null, error: table === 'flows' ? dbState.flowError : null }),
         insert: (row: unknown) => {
           dbState.inserts.push({ table, row });
           return builder;
@@ -63,6 +64,7 @@ vi.mock('@/lib/flow-engine/email-step', () => ({
 beforeEach(() => {
   vi.clearAllMocks();
   dbState.flow = null;
+  dbState.flowError = null;
   dbState.inserts = [];
   vi.mocked(findCommentFlow).mockResolvedValue({ id: 'f1', language: 'en', steps: [{ id: 's1', type: 'send_message', text: 'Hi' }] } as any);
   vi.mocked(findDmFlow).mockResolvedValue(null);
@@ -87,6 +89,8 @@ describe('POST /api/webhooks/meta', () => {
     const res = await POST(new Request('http://localhost/api/webhooks/meta', { method: 'POST', body: '{}', headers: { 'x-hub-signature-256': 'sha256=00' } }));
     expect(res.status).toBe(401);
     expect(errorSpy).toHaveBeenCalledWith('[webhook:meta]', expect.stringContaining('"event":"signature_rejected"'));
+    // No fragment of the rejected signature belongs in the logs.
+    expect(errorSpy).not.toHaveBeenCalledWith('[webhook:meta]', expect.stringContaining('signaturePrefix'));
     errorSpy.mockRestore();
   });
 
@@ -307,6 +311,67 @@ describe('POST /api/webhooks/meta', () => {
     }));
   });
 
+  it('does not re-prompt for the email when the provider fails — sends the fallback and moves on', async () => {
+    vi.mocked(loadConversationState).mockResolvedValue({
+      contact_id: 'c1',
+      current_flow_id: 'email-flow',
+      current_step_id: 'email1',
+      awaiting_input_type: 'email',
+      context: { email: { stepId: 'email1', retries: 0 } },
+    } as any);
+    dbState.flow = { id: 'email-flow', name: 'Lead flow', language: 'en', steps: [{ id: 'email1', type: 'collect_email' }] };
+    vi.mocked(captureEmail).mockResolvedValue({ ok: false, status: 'failed', message: "Thanks — we'll be in touch." });
+    const body = JSON.stringify({
+      object: 'instagram',
+      entry: [{
+        id: '17841400000000000',
+        time: 1748372160,
+        messaging: [{
+          sender: { id: '8800000000000000' },
+          recipient: { id: '17841400000000000' },
+          timestamp: 1748372160000,
+          message: { mid: 'MID-EMAIL-PROVIDER-DOWN', text: 'person@example.com' },
+        }],
+      }],
+    });
+
+    const res = await POST(signed(body));
+
+    expect(res.status).toBe(200);
+    const { sendText } = await import('@/lib/meta/client');
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining("Thanks — we'll be in touch.") }));
+    // A provider outage is not the user's fault: never ask them to retype the email.
+    expect(saveConversationState).not.toHaveBeenCalledWith(expect.objectContaining({ awaiting_input_type: 'email' }));
+    expect(saveConversationState).toHaveBeenCalledWith(expect.objectContaining({
+      current_flow_id: null,
+      current_step_id: null,
+      awaiting_input_type: null,
+    }));
+  });
+
+  it('logs the query error when the active-flow lookup fails', async () => {
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.mocked(loadConversationState).mockResolvedValue({
+      contact_id: 'c1',
+      current_flow_id: 'dm-flow',
+      current_step_id: 's1',
+      awaiting_input_type: 'button',
+      context: {},
+    } as any);
+    dbState.flow = null;
+    dbState.flowError = { message: 'connection refused' };
+
+    const res = await POST(signed(JSON.stringify(message)));
+
+    expect(res.status).toBe(200);
+    const lookupLog = infoSpy.mock.calls
+      .map(([, payload]) => String(payload))
+      .find((payload) => payload.includes('"event":"active_flow_lookup"'));
+    expect(lookupLog).toBeDefined();
+    expect(lookupLog).toContain('"error":"connection refused"');
+    infoSpy.mockRestore();
+  });
+
   it('ignores active-flow webhook messages with no text or postback', async () => {
     vi.mocked(loadConversationState).mockResolvedValue({
       contact_id: 'c1',
@@ -477,6 +542,87 @@ describe('POST /api/webhooks/meta', () => {
       direction: 'out',
       message_type: 'private_reply',
       meta_message_id: 'm',
+    }));
+  });
+
+  it('executes erasure on the confirm postback and then sends the deletion confirmation', async () => {
+    vi.mocked(loadConversationState).mockResolvedValue({
+      contact_id: 'c1',
+      current_flow_id: null,
+      current_step_id: 'confirm',
+      awaiting_input_type: 'button',
+      context: { erasure: true },
+    } as any);
+    const body = JSON.stringify({
+      object: 'instagram',
+      entry: [{
+        id: '17841400000000000',
+        time: 1748372160,
+        messaging: [{
+          sender: { id: '8800000000000000' },
+          recipient: { id: '17841400000000000' },
+          timestamp: 1748372160000,
+          postback: { mid: 'MID-ERASE-YES', payload: 'execute', title: 'Yes, delete everything' },
+        }],
+      }],
+    });
+
+    const res = await POST(signed(body));
+
+    expect(res.status).toBe(200);
+    const { executeErasure } = await import('@/lib/flow-engine/erasure-execute');
+    expect(executeErasure).toHaveBeenCalledWith({ contactId: 'c1', requestedVia: 'dm' });
+    const { sendText } = await import('@/lib/meta/client');
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({
+      igUserId: '8800000000000000',
+      text: 'Your data has been deleted. ✅',
+    }));
+    // Confirmation must go out only after the erasure RPC has succeeded.
+    expect(vi.mocked(executeErasure).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(sendText).mock.invocationCallOrder[0]);
+    // The contact row is gone after erase_contact(); nothing must be logged against it.
+    expect(logMessage).not.toHaveBeenCalled();
+  });
+
+  it('cancels erasure on the cancel postback: replies and disarms the erasure context', async () => {
+    vi.mocked(loadConversationState).mockResolvedValue({
+      contact_id: 'c1',
+      current_flow_id: null,
+      current_step_id: 'confirm',
+      awaiting_input_type: 'button',
+      context: { erasure: true },
+    } as any);
+    const body = JSON.stringify({
+      object: 'instagram',
+      entry: [{
+        id: '17841400000000000',
+        time: 1748372160,
+        messaging: [{
+          sender: { id: '8800000000000000' },
+          recipient: { id: '17841400000000000' },
+          timestamp: 1748372160000,
+          postback: { mid: 'MID-ERASE-NO', payload: 'cancelled', title: 'Cancel' },
+        }],
+      }],
+    });
+
+    const res = await POST(signed(body));
+
+    expect(res.status).toBe(200);
+    const { executeErasure } = await import('@/lib/flow-engine/erasure-execute');
+    expect(executeErasure).not.toHaveBeenCalled();
+    const { sendText } = await import('@/lib/meta/client');
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({
+      igUserId: '8800000000000000',
+      text: 'Cancelled.',
+    }));
+    // Disarm: a later unrelated 'execute' postback must not be able to wipe the contact.
+    expect(saveConversationState).toHaveBeenCalledWith(expect.objectContaining({
+      contact_id: 'c1',
+      current_flow_id: null,
+      current_step_id: null,
+      awaiting_input_type: null,
+      context: {},
     }));
   });
 
