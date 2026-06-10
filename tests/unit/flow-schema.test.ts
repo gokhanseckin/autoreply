@@ -26,4 +26,28 @@ describe('FlowStepsSchema', () => {
   it('rejects unknown step types', () => {
     expect(() => FlowStepsSchema.parse([{ id: 'x', type: 'wat' }])).toThrow();
   });
+
+  it('rejects non-http(s) destination_url schemes with a friendly message', () => {
+    const step = (url: string) => [{ id: 's1', type: 'send_link', text: 'Link', label: 'Go', destination_url: url }];
+    for (const url of ['javascript:alert(1)', 'data:text/html,<script>alert(1)</script>', 'vbscript:msgbox', 'file:///etc/passwd']) {
+      const result = FlowStepsSchema.safeParse(step(url));
+      expect(result.success, `should reject ${url}`).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues[0].message).toContain('http');
+      }
+    }
+    expect(FlowStepsSchema.safeParse(step('https://example.com/x')).success).toBe(true);
+    expect(FlowStepsSchema.safeParse(step('http://example.com/x')).success).toBe(true);
+  });
+
+  it('rejects non-http(s) url button actions', () => {
+    const steps = (url: string) => [{
+      id: 's1',
+      type: 'send_message',
+      text: 'Pick one',
+      buttons: [{ label: 'Open', action: { type: 'url', url } }],
+    }];
+    expect(FlowStepsSchema.safeParse(steps('javascript:alert(1)')).success).toBe(false);
+    expect(FlowStepsSchema.safeParse(steps('https://example.com')).success).toBe(true);
+  });
 });

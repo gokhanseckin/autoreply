@@ -1,8 +1,15 @@
 import { z } from 'zod';
 
+// z.string().url() alone accepts javascript:/data: URLs; these end up in
+// outbound buttons and the /r/[code] redirect, so only http(s) is allowed.
+const HttpUrl = z.string().url().refine(
+  (u) => /^https?:\/\//i.test(u),
+  { message: 'URL must start with http:// or https://' },
+);
+
 export const ButtonAction = z.discriminatedUnion('type', [
   z.object({ type: z.literal('next'), next_id: z.string() }),
-  z.object({ type: z.literal('url'), url: z.string().url() }),
+  z.object({ type: z.literal('url'), url: HttpUrl }),
   z.object({ type: z.literal('end') }),
 ]);
 
@@ -47,7 +54,7 @@ export const SendLinkStep = z.object({
   type: z.literal('send_link'),
   text: z.string(),
   label: z.string().max(20),
-  destination_url: z.string().url(),
+  destination_url: HttpUrl,
   next_id: z.string().optional(),
 });
 
