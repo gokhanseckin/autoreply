@@ -553,27 +553,33 @@ function EmailFields({
       <label className="grid gap-1 text-sm">
         <span className="text-xs font-medium text-gray-500">Disclaimer / consent message</span>
         <textarea
-          value={step.disclaimer_message ?? d.disclaimer}
+          value={step.disclaimer_message ?? ''}
           onChange={(e) => patchStep(index, { disclaimer_message: e.target.value })}
+          placeholder={d.disclaimer}
           className="min-h-24 border p-2"
         />
         <span className="text-xs text-gray-400">The privacy/KVKK footer is always appended below this automatically.</span>
+        <span className="text-xs text-gray-400">Leave a field blank to send the localized default (shown as placeholder).</span>
       </label>
 
       <div className="grid gap-3 md:grid-cols-2">
         <label className="grid gap-1 text-sm">
           <span className="text-xs font-medium text-gray-500">Accept button</span>
           <input
-            value={step.accept_label ?? d.accept}
+            value={step.accept_label ?? ''}
             onChange={(e) => patchStep(index, { accept_label: e.target.value })}
+            placeholder={d.accept}
+            maxLength={20}
             className="border px-2 py-2"
           />
         </label>
         <label className="grid gap-1 text-sm">
           <span className="text-xs font-medium text-gray-500">Decline button</span>
           <input
-            value={step.decline_label ?? d.decline}
+            value={step.decline_label ?? ''}
             onChange={(e) => patchStep(index, { decline_label: e.target.value })}
+            placeholder={d.decline}
+            maxLength={20}
             className="border px-2 py-2"
           />
         </label>
@@ -582,8 +588,9 @@ function EmailFields({
       <label className="grid gap-1 text-sm">
         <span className="text-xs font-medium text-gray-500">Email request message (sent after Accept)</span>
         <input
-          value={step.request_message ?? d.request}
+          value={step.request_message ?? ''}
           onChange={(e) => patchStep(index, { request_message: e.target.value })}
+          placeholder={d.request}
           className="border px-2 py-2"
         />
       </label>
@@ -591,8 +598,9 @@ function EmailFields({
       <label className="grid gap-1 text-sm">
         <span className="text-xs font-medium text-gray-500">Decline message (sent before the flow ends)</span>
         <input
-          value={step.decline_message ?? d.declineGoodbye}
+          value={step.decline_message ?? ''}
           onChange={(e) => patchStep(index, { decline_message: e.target.value })}
+          placeholder={d.declineGoodbye}
           className="border px-2 py-2"
         />
       </label>
@@ -615,6 +623,9 @@ function EmailFields({
           </select>
           {loadingEvents && <span className="text-xs text-gray-400">Loading events…</span>}
           {eventsError && <span className="text-xs text-red-600">Could not load events: {eventsError}</span>}
+          {!loadingEvents && !eventsError && events.length === 0 && (
+            <span className="text-xs text-gray-400">No events found in Resend — create one in the Resend dashboard first.</span>
+          )}
         </label>
       )}
 

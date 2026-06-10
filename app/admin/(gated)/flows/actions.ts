@@ -28,6 +28,7 @@ function revalidateFlowAdmin(flowId?: string) {
 function formatFlowStepIssues(issues: { path: PropertyKey[]; message: string }[]): string {
   const messages = issues.map((issue) => {
     const field = String(issue.path.at(-1) ?? '');
+    if (field === 'accept_label' || field === 'decline_label') return 'Button labels must be 20 characters or fewer.';
     if (field === 'label') return 'Label must be 20 characters or fewer.';
     if (field === 'destination_url' || field === 'url') return 'Destination URL must be a valid link starting with http:// or https://.';
     if (field === 'text') return 'Message text is required.';

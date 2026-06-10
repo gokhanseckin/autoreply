@@ -51,8 +51,8 @@ export const CollectEmailStep = z.object({
   // store only id/type/next_id) keep validating; the flow engine and admin UI
   // fall back to localized defaults when a field is absent.
   disclaimer_message: z.string().optional(),
-  accept_label: z.string().optional(),
-  decline_label: z.string().optional(),
+  accept_label: z.string().max(20).optional(),
+  decline_label: z.string().max(20).optional(),
   request_message: z.string().optional(),
   decline_message: z.string().optional(),
   // Resend custom-event name fired on capture to start an Automation.

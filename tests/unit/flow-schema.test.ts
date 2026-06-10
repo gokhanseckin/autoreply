@@ -73,4 +73,10 @@ describe('FlowStepsSchema', () => {
     if (emailStep.type !== 'collect_email') throw new Error('unexpected type');
     expect(emailStep.resend_event).toBe('welcome');
   });
+
+  it('caps collect_email button labels at 20 characters', () => {
+    const step = (accept_label: string) => [{ id: 'e1', type: 'collect_email', accept_label }];
+    expect(FlowStepsSchema.safeParse(step('a'.repeat(21))).success).toBe(false);
+    expect(FlowStepsSchema.safeParse(step('a'.repeat(20))).success).toBe(true);
+  });
 });
