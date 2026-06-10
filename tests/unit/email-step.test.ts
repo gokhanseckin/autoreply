@@ -115,6 +115,10 @@ describe('captureEmail', () => {
     const result = await captureEmail({ ...baseArgs, resendEvent: 'welcome' });
 
     expect(result).toEqual({ ok: true, status: 'confirmed', message: expect.stringContaining('Bonus sent') });
+    expect(dbCalls.updates).toContainEqual({
+      table: 'email_subscribers',
+      values: expect.objectContaining({ status: 'confirmed', provider_id: 'ext1' }),
+    });
     const log = errorSpy.mock.calls.map(([, payload]) => String(payload)).join('\n');
     expect(log).toContain('events/send 500');
     errorSpy.mockRestore();
