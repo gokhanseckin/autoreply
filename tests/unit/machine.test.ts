@@ -192,6 +192,7 @@ describe('advance collect_email', () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0].text).toContain('Custom disclaimer');
+    expect(calls[0].text).toContain('Gizlilik:');
     expect(calls[0].buttons.map((b) => b.title)).toEqual(['Kabul Et', 'Reddet']);
     expect(calls[0].buttons.map((b) => b.payload)).toEqual(['EMAIL_AGREE_e1', 'EMAIL_DECLINE_e1']);
     expect(result.awaitingInputType).toBe('button');
@@ -205,5 +206,6 @@ describe('advance collect_email', () => {
     await advance(ctx({ steps: emailSteps, currentStepId: 'e1', language: 'tr' }), { type: 'trigger' }, fx);
 
     expect(calls[0].buttons.map((b) => b.title)).toEqual(['Kabul Et', 'Reddet']);
+    expect(calls[0].text).toContain('Gizlilik:');
   });
 });
