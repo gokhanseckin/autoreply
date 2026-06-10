@@ -669,8 +669,33 @@ describe('POST /api/webhooks/meta', () => {
 
     expect(res.status).toBe(200);
     const { sendText } = await import('@/lib/meta/client');
-    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('No problem') }));
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: 'No problem.' }));
     expect(sendText).not.toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('should not run') }));
+    expect(saveConversationState).toHaveBeenCalledWith(expect.objectContaining({
+      current_flow_id: null, current_step_id: null, awaiting_input_type: null,
+    }));
+  });
+
+  it('lets a decline postback end the flow even while awaiting the email text', async () => {
+    vi.mocked(loadConversationState).mockResolvedValue({
+      contact_id: 'c1', current_flow_id: 'email-flow', current_step_id: 'email1',
+      awaiting_input_type: 'email', context: { email: { stepId: 'email1', retries: 0 } },
+    } as any);
+    dbState.flow = { id: 'email-flow', name: 'Lead flow', language: 'en', steps: [{ id: 'email1', type: 'collect_email' }] };
+    const body = JSON.stringify({
+      object: 'instagram',
+      entry: [{ id: '17841400000000000', time: 1748372160, messaging: [{
+        sender: { id: '8800000000000000' }, recipient: { id: '17841400000000000' }, timestamp: 1748372160000,
+        postback: { mid: 'MID-DECLINE-LATE', payload: 'EMAIL_DECLINE_email1', title: 'Decline' },
+      }] }],
+    });
+
+    const res = await POST(signed(body));
+
+    expect(res.status).toBe(200);
+    expect(captureEmail).not.toHaveBeenCalled();
+    const { sendText } = await import('@/lib/meta/client');
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: 'No problem.' }));
     expect(saveConversationState).toHaveBeenCalledWith(expect.objectContaining({
       current_flow_id: null, current_step_id: null, awaiting_input_type: null,
     }));
