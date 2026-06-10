@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   account: null as null | { email_provider_config: unknown },
+  dbError: null as null | { message: string },
 }));
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
@@ -22,7 +23,10 @@ vi.mock('@/lib/db/client', () => ({
     from: () => ({
       select: () => ({
         eq: () => ({
-          maybeSingle: async () => ({ data: state.account, error: null }),
+          maybeSingle: async () =>
+            state.dbError
+              ? { data: null, error: state.dbError }
+              : { data: state.account, error: null },
         }),
       }),
     }),
@@ -34,6 +38,7 @@ import { listResendEvents } from '@/app/admin/(gated)/flows/actions';
 beforeEach(() => {
   vi.clearAllMocks();
   state.account = { email_provider_config: { kind: 'resend', api_key_enc: Buffer.from('enc').toString('base64'), audience_id: 'aud-1' } };
+  state.dbError = null;
 });
 
 describe('listResendEvents', () => {
@@ -66,6 +71,45 @@ describe('listResendEvents', () => {
     const result = await listResendEvents('account-1');
 
     expect(result).toEqual({ ok: true, events: [] });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('returns the Resend status as an error on a non-ok response', async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 401 }) as any;
+
+    const result = await listResendEvents('account-1');
+
+    expect(result).toEqual({ ok: false, error: 'Resend 401' });
+  });
+
+  it('returns an error without leaking the key when fetch rejects', async () => {
+    global.fetch = vi.fn().mockRejectedValue(new Error('fetch failed')) as any;
+
+    const result = await listResendEvents('account-1');
+
+    expect(result).toEqual({ ok: false, error: 'fetch failed' });
+    expect(JSON.stringify(result)).not.toContain('RESEND_KEY');
+  });
+
+  it('returns an empty list when the account does not exist', async () => {
+    state.account = null;
+    const fetchMock = vi.fn();
+    global.fetch = fetchMock as any;
+
+    const result = await listResendEvents('account-1');
+
+    expect(result).toEqual({ ok: true, events: [] });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('returns a DB error when the account lookup fails', async () => {
+    state.dbError = { message: 'boom' };
+    const fetchMock = vi.fn();
+    global.fetch = fetchMock as any;
+
+    const result = await listResendEvents('account-1');
+
+    expect(result).toEqual({ ok: false, error: 'DB error: boom' });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

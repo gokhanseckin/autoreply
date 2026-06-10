@@ -187,6 +187,6 @@ export async function listResendEvents(accountId: string): Promise<ListEventsRes
       : [];
     return { ok: true, events };
   } catch (e) {
-    return { ok: false, error: (e as Error).message };
+    return { ok: false, error: e instanceof Error ? e.message : 'Unknown error' };
   }
 }
