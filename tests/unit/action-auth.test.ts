@@ -55,7 +55,7 @@ vi.mock('@/lib/db/client', () => ({
 
 import { addAccount, repairWebhookSubscription } from '@/app/admin/(gated)/accounts/actions';
 import { eraseContact } from '@/app/admin/(gated)/contacts/actions';
-import { createFlow, saveFlowBuilderSteps, saveFlowSettings, saveFlowSteps, setFlowArchived } from '@/app/admin/(gated)/flows/actions';
+import { createFlow, listResendEvents, saveFlowBuilderSteps, saveFlowSettings, saveFlowSteps, setFlowArchived } from '@/app/admin/(gated)/flows/actions';
 import { setPostFlows, syncPosts } from '@/app/admin/(gated)/posts/actions';
 
 function form(values: Record<string, string>) {
@@ -129,6 +129,14 @@ describe('admin server actions reject unauthenticated callers', () => {
     const result = await syncPosts('account-1');
     expect(result).toEqual({ ok: false, error: expect.stringMatching(/unauthorized/i) });
     expect(state.mutations).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it('listResendEvents returns an error and never calls Resend', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const result = await listResendEvents('account-1');
+    expect(result).toEqual({ ok: false, error: expect.stringMatching(/unauthorized/i) });
     expect(fetchSpy).not.toHaveBeenCalled();
     fetchSpy.mockRestore();
   });
