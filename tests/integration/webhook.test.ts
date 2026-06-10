@@ -11,6 +11,7 @@ import { captureEmail } from '@/lib/flow-engine/email-step';
 
 const dbState = vi.hoisted(() => ({
   flow: null as any,
+  flowError: null as any,
   inserts: [] as { table: string; row: unknown }[],
 }));
 
@@ -44,7 +45,7 @@ vi.mock('@/lib/db/client', () => ({
       const builder: any = {
         select: () => builder,
         eq: () => builder,
-        maybeSingle: async () => ({ data: table === 'flows' ? dbState.flow : null, error: null }),
+        maybeSingle: async () => ({ data: table === 'flows' ? dbState.flow : null, error: table === 'flows' ? dbState.flowError : null }),
         insert: (row: unknown) => {
           dbState.inserts.push({ table, row });
           return builder;
@@ -63,6 +64,7 @@ vi.mock('@/lib/flow-engine/email-step', () => ({
 beforeEach(() => {
   vi.clearAllMocks();
   dbState.flow = null;
+  dbState.flowError = null;
   dbState.inserts = [];
   vi.mocked(findCommentFlow).mockResolvedValue({ id: 'f1', language: 'en', steps: [{ id: 's1', type: 'send_message', text: 'Hi' }] } as any);
   vi.mocked(findDmFlow).mockResolvedValue(null);
@@ -343,6 +345,29 @@ describe('POST /api/webhooks/meta', () => {
       current_step_id: null,
       awaiting_input_type: null,
     }));
+  });
+
+  it('logs the query error when the active-flow lookup fails', async () => {
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.mocked(loadConversationState).mockResolvedValue({
+      contact_id: 'c1',
+      current_flow_id: 'dm-flow',
+      current_step_id: 's1',
+      awaiting_input_type: 'button',
+      context: {},
+    } as any);
+    dbState.flow = null;
+    dbState.flowError = { message: 'connection refused' };
+
+    const res = await POST(signed(JSON.stringify(message)));
+
+    expect(res.status).toBe(200);
+    const lookupLog = infoSpy.mock.calls
+      .map(([, payload]) => String(payload))
+      .find((payload) => payload.includes('"event":"active_flow_lookup"'));
+    expect(lookupLog).toBeDefined();
+    expect(lookupLog).toContain('"error":"connection refused"');
+    infoSpy.mockRestore();
   });
 
   it('ignores active-flow webhook messages with no text or postback', async () => {

@@ -495,7 +495,7 @@ async function processMessagingEvent(entryId: string, m: z.infer<typeof Messagin
 
   if (state?.current_flow_id) {
     const flow = await serviceClient().from('flows').select('*').eq('id', state.current_flow_id).maybeSingle();
-    logWebhookDecision('active_flow_lookup', { flowId: shortId(state.current_flow_id), found: !!flow.data });
+    logWebhookDecision('active_flow_lookup', { flowId: shortId(state.current_flow_id), found: !!flow.data, error: flow.error?.message ?? null });
     if (flow.data) {
       const effects = buildEffects(token, account.id, contact.id);
       const handledEmail = await maybeHandleEmailStep({
