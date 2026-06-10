@@ -89,6 +89,8 @@ describe('POST /api/webhooks/meta', () => {
     const res = await POST(new Request('http://localhost/api/webhooks/meta', { method: 'POST', body: '{}', headers: { 'x-hub-signature-256': 'sha256=00' } }));
     expect(res.status).toBe(401);
     expect(errorSpy).toHaveBeenCalledWith('[webhook:meta]', expect.stringContaining('"event":"signature_rejected"'));
+    // No fragment of the rejected signature belongs in the logs.
+    expect(errorSpy).not.toHaveBeenCalledWith('[webhook:meta]', expect.stringContaining('signaturePrefix'));
     errorSpy.mockRestore();
   });
 

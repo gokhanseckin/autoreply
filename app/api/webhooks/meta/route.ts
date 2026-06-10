@@ -27,7 +27,6 @@ export async function POST(req: Request) {
     console.error('[webhook:meta]', JSON.stringify({
       event: 'signature_rejected',
       hasSignature: !!header,
-      signaturePrefix: header?.slice(0, 15) ?? null,
       bodyLength: raw.length,
       hasMetaAppSecret: !!process.env.META_APP_SECRET,
       hasInstagramAppSecret: !!process.env.INSTAGRAM_APP_SECRET,
