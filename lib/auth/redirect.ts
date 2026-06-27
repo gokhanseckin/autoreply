@@ -21,10 +21,11 @@ export function getAuthRedirectUrl(
   appUrl = process.env.NEXT_PUBLIC_APP_URL ?? '',
 ): string | null {
   const url = new URL(requestUrl);
-  const hasRootAuthCode = url.pathname === '/' && url.searchParams.has('code');
+  const hasRootAuthParams =
+    url.pathname === '/' && (url.searchParams.has('code') || url.searchParams.has('token_hash'));
   const canonicalOrigin = isLocalHostname(url.hostname) ? null : appOrigin(appUrl);
 
-  if (hasRootAuthCode) {
+  if (hasRootAuthParams) {
     url.pathname = '/auth/callback';
   }
 
