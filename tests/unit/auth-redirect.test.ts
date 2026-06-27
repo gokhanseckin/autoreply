@@ -11,6 +11,12 @@ describe('getAuthRedirectUrl', () => {
     );
   });
 
+  it('moves root token-hash magic links to the canonical auth callback', () => {
+    expect(getAuthRedirectUrl(`${teamAlias}/?token_hash=hash123&type=email`, canonical)).toBe(
+      `${canonical}/auth/callback?token_hash=hash123&type=email`,
+    );
+  });
+
   it('moves callback requests from a Vercel team alias to the canonical domain before exchanging the code', () => {
     expect(getAuthRedirectUrl(`${teamAlias}/auth/callback?code=abc123`, canonical)).toBe(
       `${canonical}/auth/callback?code=abc123`,
