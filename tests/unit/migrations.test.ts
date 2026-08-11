@@ -23,4 +23,22 @@ describe('supabase migrations', () => {
     );
     expect(hasCompositeIndex).toBe(true);
   });
+
+  it('enables RLS on flow_posts', () => {
+    const enablesRls = migrations.some((m) =>
+      /alter table\s+(?:public\.)?flow_posts\s+enable row level security\s*;/i.test(m.sql),
+    );
+    expect(enablesRls).toBe(true);
+  });
+
+  it('restricts the privileged erase_contact function to the service role', () => {
+    const securitySql = migrations.map((m) => m.sql).join('\n');
+    expect(securitySql).toMatch(/security definer\s+set search_path\s*=\s*''/i);
+    expect(securitySql).toMatch(
+      /revoke execute on function public\.erase_contact\s*\(\s*uuid\s*,\s*text\s*\)\s+from\s+public\s*,\s*anon\s*,\s*authenticated/i,
+    );
+    expect(securitySql).toMatch(
+      /grant execute on function public\.erase_contact\s*\(\s*uuid\s*,\s*text\s*\)\s+to\s+service_role/i,
+    );
+  });
 });
