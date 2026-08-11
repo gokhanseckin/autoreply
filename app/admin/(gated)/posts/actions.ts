@@ -14,7 +14,9 @@ export async function setPostFlows(postId: string, flowIds: string[]) {
   revalidatePath('/admin/posts');
 }
 
-export type SyncResult = { ok: true; count: number } | { ok: false; error: string };
+export type SyncResult =
+  | { ok: true; count: number }
+  | { ok: false; error: string; reconnect?: boolean };
 
 export async function syncPosts(igAccountId: string): Promise<SyncResult> {
   if (!(await isAdminRequest())) return { ok: false, error: UNAUTHORIZED_MESSAGE };
@@ -28,6 +30,13 @@ export async function syncPosts(igAccountId: string): Promise<SyncResult> {
   });
   const json = await res.json();
   if (!res.ok) {
+    if (json?.error?.code === 190) {
+      return {
+        ok: false,
+        error: 'The Instagram access token is invalid or expired.',
+        reconnect: true,
+      };
+    }
     return { ok: false, error: json?.error?.message ?? `Instagram returned ${res.status}` };
   }
   let count = 0;

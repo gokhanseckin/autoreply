@@ -37,6 +37,8 @@ vi.mock('@/lib/db/client', () => ({
   }),
   serviceClient: () => ({
     from: (table: string) => {
+      // Supabase's fluent mock intentionally exposes a dynamic test-only builder.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const builder: any = {
         insert: () => { state.mutations.push(`insert:${table}`); return builder; },
         update: () => { state.mutations.push(`update:${table}`); return builder; },
@@ -53,7 +55,7 @@ vi.mock('@/lib/db/client', () => ({
   }),
 }));
 
-import { addAccount, repairWebhookSubscription } from '@/app/admin/(gated)/accounts/actions';
+import { addAccount, repairWebhookSubscription, replaceAccountToken } from '@/app/admin/(gated)/accounts/actions';
 import { eraseContact } from '@/app/admin/(gated)/contacts/actions';
 import { createFlow, listResendEvents, saveFlowBuilderSteps, saveFlowSettings, saveFlowSteps, setFlowArchived } from '@/app/admin/(gated)/flows/actions';
 import { setPostFlows, syncPosts } from '@/app/admin/(gated)/posts/actions';
@@ -88,6 +90,15 @@ describe('admin server actions reject unauthenticated callers', () => {
 
   it('repairWebhookSubscription returns an error and never reads the token', async () => {
     const result = await repairWebhookSubscription(null, form({ account_id: 'account-1' }));
+    expect(result).toEqual({ ok: false, error: expect.stringMatching(/unauthorized/i) });
+    expect(state.mutations).toEqual([]);
+  });
+
+  it('replaceAccountToken returns an error and never reads or writes the account', async () => {
+    const result = await replaceAccountToken(null, form({
+      account_id: 'account-1',
+      page_access_token: 'NEW_TOKEN',
+    }));
     expect(result).toEqual({ ok: false, error: expect.stringMatching(/unauthorized/i) });
     expect(state.mutations).toEqual([]);
   });

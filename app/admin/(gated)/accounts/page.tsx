@@ -1,5 +1,6 @@
 import { serviceClient } from '@/lib/db/client';
 import { AccountForm } from './account-form';
+import { TokenReplacementForm } from './token-replacement-form';
 import { WebhookRepairForm } from './webhook-repair-form';
 
 export default async function AccountsPage() {
@@ -15,6 +16,7 @@ export default async function AccountsPage() {
             <span>{a.name} <span className="text-gray-500">({a.ig_business_account_id})</span></span>
             <div className="flex flex-col items-end gap-2">
               <span className="text-xs text-gray-500">{a.default_language}</span>
+              <TokenReplacementForm accountId={a.id} />
               <WebhookRepairForm accountId={a.id} />
             </div>
           </li>

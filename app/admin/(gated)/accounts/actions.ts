@@ -11,6 +11,9 @@ export type AddAccountResult =
 export type WebhookSubscriptionResult =
   | { ok: true; message: string }
   | { ok: false; error: string };
+export type ReplaceAccountTokenResult =
+  | { ok: true; message: string }
+  | { ok: false; error: string };
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -80,4 +83,53 @@ export async function repairWebhookSubscription(_prev: unknown, form: FormData):
 
   revalidatePath('/admin/accounts');
   return { ok: true, message: `Webhook subscription refreshed for ${account.name}.` };
+}
+
+export async function replaceAccountToken(_prev: unknown, form: FormData): Promise<ReplaceAccountTokenResult> {
+  if (!(await isAdminRequest())) return { ok: false, error: UNAUTHORIZED_MESSAGE };
+  const accountId = String(form.get('account_id') ?? '');
+  const token = String(form.get('page_access_token') ?? '').trim();
+  if (!accountId) return { ok: false, error: 'Instagram account is missing.' };
+  if (!token) return { ok: false, error: 'Enter a new Instagram access token.' };
+
+  const db = serviceClient();
+  const { data: account, error } = await db
+    .from('ig_accounts')
+    .select('id,name,ig_business_account_id')
+    .eq('id', accountId)
+    .maybeSingle();
+  if (error) return { ok: false, error: `Database error: ${error.message}` };
+  if (!account) return { ok: false, error: 'Instagram account not found.' };
+
+  let me: { id: string; user_id?: string };
+  try {
+    me = await getMe(token);
+  } catch (e) {
+    return { ok: false, error: `Could not verify the new token with Instagram: ${errorMessage(e)}` };
+  }
+
+  const tokenAccountId = me.user_id ?? me.id;
+  if (tokenAccountId !== account.ig_business_account_id) {
+    return {
+      ok: false,
+      error: `This token belongs to a different Instagram account (${tokenAccountId}).`,
+    };
+  }
+
+  try {
+    await subscribeToAppWebhooks(token);
+  } catch (e) {
+    return { ok: false, error: `The token is valid, but webhook reconnection failed: ${errorMessage(e)}` };
+  }
+
+  const encryptedToken = await encryptSecret(token);
+  const { error: updateError } = await db
+    .from('ig_accounts')
+    .update({ page_access_token_enc: encodeBytea(encryptedToken) })
+    .eq('id', accountId);
+  if (updateError) return { ok: false, error: `Database error: ${updateError.message}` };
+
+  revalidatePath('/admin/accounts');
+  revalidatePath('/admin/posts');
+  return { ok: true, message: `Instagram reconnected for ${account.name}.` };
 }

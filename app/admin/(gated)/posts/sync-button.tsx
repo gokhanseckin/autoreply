@@ -21,7 +21,12 @@ export function SyncButton({ action }: { action: () => Promise<SyncResult> }) {
       </button>
       {isPending && <span className="text-sm text-neutral-500 dark:text-neutral-400">Syncing…</span>}
       {!isPending && result?.ok === true && <span className="text-sm text-emerald-700 dark:text-emerald-300">Synced {result.count} post{result.count === 1 ? '' : 's'}.</span>}
-      {!isPending && result?.ok === false && <span className="text-sm text-red-700 dark:text-red-300">{result.error}</span>}
+      {!isPending && result?.ok === false && (
+        <span className="text-sm text-red-700 dark:text-red-300">
+          {result.error}{' '}
+          {result.reconnect && <a className="underline" href="/admin/accounts">Replace it on Accounts</a>}
+        </span>
+      )}
     </div>
   );
 }
