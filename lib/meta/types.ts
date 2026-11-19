@@ -9,7 +9,11 @@ import { z } from 'zod';
 // comment — which we route to the account's story-reply flows.
 export const CommentValue = z.object({
   id: z.string(),
-  from: z.object({ id: z.string().optional(), username: z.string().optional() }),
+  from: z.object({
+    id: z.string().optional(),
+    username: z.string().optional(),
+    self_ig_scoped_id: z.string().optional(),
+  }),
   media: z.object({ id: z.string(), media_product_type: z.string().optional() }),
   text: z.string(),
 });

@@ -5,6 +5,8 @@ import { revalidatePath } from 'next/cache';
 import { FlowStepsSchema } from '@/lib/flow-engine/schema';
 import { isAdminRequest, requireAdmin, UNAUTHORIZED_MESSAGE } from '@/lib/auth/require-admin';
 import { decryptSecret } from '@/lib/db/encryption';
+import { parsePublicReplyForm } from '@/lib/flow-engine/public-replies';
+import type { TablesUpdate } from '@/lib/db/types';
 
 const LANGUAGES = new Set(['tr', 'en']);
 const TRIGGER_TYPES = new Set(['comment', 'dm', 'story_reply']);
@@ -44,13 +46,15 @@ export async function createFlow(form: FormData) {
   await requireAdmin();
   const db = serviceClient();
   const keywords = parseKeywords(form.get('trigger_keywords'));
+  const triggerType = String(form.get('trigger_type'));
   const { data } = await db.from('flows').insert({
     name: String(form.get('name')),
     ig_account_id: String(form.get('ig_account_id')),
     language: String(form.get('language')),
-    trigger_type: String(form.get('trigger_type')) as any,
+    trigger_type: triggerType,
     trigger_keywords: keywords,
     steps: [],
+    public_reply_enabled: triggerType === 'comment',
   }).select().single();
   redirect(`/admin/flows/${data!.id}`);
 }
@@ -102,23 +106,33 @@ export async function saveFlowBuilderSteps(
   return { ok: true };
 }
 
-export async function saveFlowSettings(flowId: string, form: FormData) {
+export async function saveFlowSettings(flowId: string, form: FormData): Promise<SaveResult> {
   await requireAdmin();
   const name = String(form.get('name') ?? '').trim();
   const language = String(form.get('language'));
   const triggerType = String(form.get('trigger_type'));
   const triggerKeywords = parseKeywords(form.get('trigger_keywords'));
   if (!name) {
-    throw new Error('Flow name is required');
+    return { ok: false, error: 'Flow name is required.' };
   }
   if (!LANGUAGES.has(language)) {
-    throw new Error('Unsupported flow language');
+    return { ok: false, error: 'Unsupported flow language.' };
   }
   if (!TRIGGER_TYPES.has(triggerType)) {
-    throw new Error('Unsupported flow trigger type');
+    return { ok: false, error: 'Unsupported flow trigger type.' };
   }
   if (triggerKeywords.length === 0) {
-    throw new Error('Add at least one keyword');
+    return { ok: false, error: 'Add at least one keyword.' };
+  }
+
+  let publicReplySettings: Pick<TablesUpdate<'flows'>, 'public_reply_enabled' | 'public_reply_options'> = {};
+  if (triggerType === 'comment') {
+    const replies = parsePublicReplyForm(form);
+    if (!replies.ok) return replies;
+    publicReplySettings = {
+      public_reply_enabled: form.get('public_reply_enabled') === 'on',
+      public_reply_options: replies.options,
+    };
   }
 
   const db = serviceClient();
@@ -129,17 +143,19 @@ export async function saveFlowSettings(flowId: string, form: FormData) {
       language,
       trigger_type: triggerType,
       trigger_keywords: triggerKeywords,
+      ...publicReplySettings,
       updated_at: new Date().toISOString(),
     })
     .eq('id', flowId);
-  if (error) throw error;
+  if (error) return { ok: false, error: `DB error: ${error.message}` };
 
   if (triggerType !== 'comment') {
     const { error: deleteError } = await db.from('flow_posts').delete().eq('flow_id', flowId);
-    if (deleteError) throw deleteError;
+    if (deleteError) return { ok: false, error: `DB error: ${deleteError.message}` };
   }
 
   revalidateFlowAdmin(flowId);
+  return { ok: true };
 }
 
 export async function setFlowArchived(flowId: string, archived: boolean) {

@@ -341,6 +341,8 @@ export type Database = {
           ig_account_id: string
           language: string
           name: string
+          public_reply_enabled: boolean
+          public_reply_options: Json
           steps: Json
           trigger_keywords: string[]
           trigger_type: string
@@ -355,6 +357,8 @@ export type Database = {
           ig_account_id: string
           language?: string
           name: string
+          public_reply_enabled?: boolean
+          public_reply_options?: Json
           steps?: Json
           trigger_keywords?: string[]
           trigger_type: string
@@ -369,6 +373,8 @@ export type Database = {
           ig_account_id?: string
           language?: string
           name?: string
+          public_reply_enabled?: boolean
+          public_reply_options?: Json
           steps?: Json
           trigger_keywords?: string[]
           trigger_type?: string
