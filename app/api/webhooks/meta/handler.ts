@@ -7,7 +7,7 @@ import { buildErasureSteps, erasureOutcomeText, ERASURE_FLOW_ID } from '@/lib/fl
 import { executeErasure } from '@/lib/flow-engine/erasure-execute';
 import { findIgAccountByBusinessId, upsertContact, loadConversationState, saveConversationState, alreadyProcessed, claimInboundMessage, logMessage } from '@/lib/db/queries';
 import { decryptSecret, decodeBytea } from '@/lib/db/encryption';
-import { sendButtons, sendText, sendPrivateReplyToComment } from '@/lib/meta/client';
+import { sendButtons, sendText, sendPrivateReplyToComment, sendPublicReplyToComment } from '@/lib/meta/client';
 import { generateLinkCode } from '@/lib/links/shorten';
 import { serviceClient } from '@/lib/db/client';
 import { FlowStepsSchema, type FlowStep } from '@/lib/flow-engine/schema';
@@ -17,11 +17,18 @@ import { captureEmail } from '@/lib/flow-engine/email-step';
 import { resolveCollectEmailText } from '@/lib/consent/collect-email-step-text';
 import type { ProviderConfig } from '@/lib/email-providers/factory';
 import type { Json } from '@/lib/db/types';
+import { choosePublicReply, readPublicReplyOptions } from '@/lib/flow-engine/public-replies';
 
-function buildEffects(token: string, igAccountId: string, contactId: string): Effects {
+function buildEffects(token: string, igAccountId: string, contactId: string, onDmSent?: () => void): Effects {
+  async function afterSend<T>(request: Promise<T>): Promise<T> {
+    const sent = await request;
+    onDmSent?.();
+    return sent;
+  }
+
   return {
-    sendText: ({ token: t, igUserId, text, commentId }) => sendText({ pageAccessToken: t, igUserId, text, commentId }),
-    sendButtons: ({ token: t, igUserId, text, buttons, commentId }) => sendButtons({ pageAccessToken: t, igUserId, text, buttons: buttons as any, commentId }),
+    sendText: ({ igUserId, text, commentId }) => afterSend(sendText({ pageAccessToken: token, igUserId, text, commentId })),
+    sendButtons: ({ igUserId, text, buttons, commentId }) => afterSend(sendButtons({ pageAccessToken: token, igUserId, text, buttons: buttons as any, commentId })),
     recordLink: async ({ flowId, stepId, label, destinationUrl, contactId: c }) => {
       const db = serviceClient();
       const { data: link } = await db.from('links').insert({ flow_id: flowId, step_id: stepId, label, destination_url: destinationUrl }).select().single();
@@ -327,6 +334,40 @@ function errorDetail(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+async function postPublicCommentReply(args: {
+  token: string;
+  igAccountId: string;
+  contactId: string;
+  commentId: string;
+  options: unknown;
+}) {
+  const text = choosePublicReply(readPublicReplyOptions(args.options));
+  if (!text) return;
+
+  const row = {
+    ig_account_id: args.igAccountId,
+    contact_id: args.contactId,
+    direction: 'out',
+    message_type: 'public_reply',
+    payload: { text, comment_id: args.commentId },
+  };
+  let replyId: string | undefined;
+  let failure: { message: string } | undefined;
+  try {
+    const reply = await sendPublicReplyToComment({ pageAccessToken: args.token, commentId: args.commentId, text });
+    replyId = reply.id;
+  } catch (err) {
+    const error = errorDetail(err);
+    failure = { message: error };
+    console.error('[webhook:meta]', JSON.stringify({ event: 'public_comment_reply_failed', commentId: shortId(args.commentId), error }));
+  }
+  try {
+    await logMessage({ ...row, meta_message_id: replyId, error: failure });
+  } catch (err) {
+    console.error('[webhook:meta]', JSON.stringify({ event: 'public_comment_reply_log_failed', commentId: shortId(args.commentId), error: errorDetail(err) }));
+  }
+}
+
 async function processCommentEvent(entryId: string, v: z.infer<typeof CommentValue>): Promise<void> {
   logWebhookDecision('comment_parsed', {
     entryId: shortId(entryId),
@@ -334,6 +375,10 @@ async function processCommentEvent(entryId: string, v: z.infer<typeof CommentVal
     mediaProductType: v.media.media_product_type ?? null,
     isStory: isStoryComment(v),
   });
+  if (v.from.id === entryId || v.from.self_ig_scoped_id) {
+    logWebhookDecision('comment_ignored_self', { commentId: shortId(v.id) });
+    return;
+  }
   if (await alreadyProcessed(v.id)) {
     logWebhookDecision('comment_duplicate', { commentId: shortId(v.id) });
     return;
@@ -367,24 +412,27 @@ async function processCommentEvent(entryId: string, v: z.infer<typeof CommentVal
   }
   const token = await decryptToken(account.page_access_token_enc);
   const steps = FlowStepsSchema.parse(flow.steps);
-  let result = completed();
-  if (storyComment) {
-    // A public story comment is just a story reply that happens to be
-    // public: run the same flow as a DM. The opening message is addressed to
-    // the comment so Instagram delivers it to the user's inbox; buttons,
-    // links and footer-on-first all behave exactly like a story reply.
-    result = await advance(
-      { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: commenterId, appendFooter: true, replyToCommentId: v.id },
-      { type: 'trigger' },
-      buildEffects(token, account.id, contact.id),
-    );
-  } else {
-    const firstStep = steps[0];
-    if (firstStep?.type === 'send_message' && (!firstStep.buttons || firstStep.buttons.length === 0)) {
+  const mediaType = v.media.media_product_type?.toUpperCase();
+  const canReplyPublicly = flow.public_reply_enabled && (!mediaType || mediaType === 'FEED' || mediaType === 'REELS');
+  let publicReply: Promise<void> | undefined;
+  const onDmSent = () => {
+    if (canReplyPublicly && !publicReply) {
+      publicReply = postPublicCommentReply({
+        token, igAccountId: account.id, contactId: contact.id, commentId: v.id, options: flow.public_reply_options,
+      });
+    }
+  };
+
+  const effects = buildEffects(token, account.id, contact.id, onDmSent);
+  const firstStep = steps[0];
+  try {
+    let result: AdvanceResult;
+    if (!storyComment && firstStep?.type === 'send_message' && !firstStep.buttons?.length) {
       // First touch from a post comment: footer the opening private reply
       // (unless it's an intentionally plain message), then continue clean.
       const replyText = firstStep.plain ? firstStep.text : appendPrivacyFooter(firstStep.text, flow.language as Lang);
       const sentReply = await sendPrivateReplyToComment({ pageAccessToken: token, commentId: v.id, text: replyText });
+      onDmSent();
       await logMessage({ ig_account_id: account.id, contact_id: contact.id, direction: 'out', message_type: 'private_reply', payload: { text: replyText, plain: firstStep.plain ?? false }, meta_message_id: sentReply.message_id });
       result = await advanceFromNext({
         step: firstStep,
@@ -395,17 +443,20 @@ async function processCommentEvent(entryId: string, v: z.infer<typeof CommentVal
         flowId: flow.id,
         pageAccessToken: token,
         igUserId: commenterId,
-        effects: buildEffects(token, account.id, contact.id),
+        effects,
       });
     } else {
       result = await advance(
-        { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: commenterId, appendFooter: true },
+        { steps, language: flow.language as Lang, currentStepId: null, contactId: contact.id, igAccountId: account.id, flowId: flow.id, pageAccessToken: token, igUserId: commenterId, appendFooter: true, replyToCommentId: v.id },
         { type: 'trigger' },
-        buildEffects(token, account.id, contact.id),
+        effects,
       );
     }
+    await saveFlowResult(contact.id, flow.id, result);
+  } finally {
+    // Keep the public reply alive through the request while the DM flow advances.
+    await publicReply;
   }
-  await saveFlowResult(contact.id, flow.id, result);
 }
 
 async function processMessagingEvent(entryId: string, m: z.infer<typeof MessagingMessage>, mid: string): Promise<void> {

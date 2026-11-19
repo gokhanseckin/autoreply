@@ -17,7 +17,7 @@ export type Button =
   | { type: 'postback'; title: string; payload: string }
   | { type: 'web_url'; title: string; url: string };
 
-async function call(token: string, path: string, body: unknown) {
+async function call<Response = { message_id: string; recipient_id: string }>(token: string, path: string, body: unknown) {
   const res = await fetch(`${GRAPH}${path}?access_token=${encodeURIComponent(token)}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -30,7 +30,7 @@ async function call(token: string, path: string, body: unknown) {
     try { parsed = JSON.parse(text); } catch {}
     throw new MetaAPIError(res.status, parsed.error ?? { code: 0, type: 'unknown', message: text });
   }
-  return JSON.parse(text) as { message_id: string; recipient_id: string };
+  return JSON.parse(text) as Response;
 }
 
 // `commentId`, when set, addresses the message to a comment instead of a user.
@@ -77,6 +77,14 @@ export async function sendPrivateReplyToComment(args: {
   text: string;
 }) {
   return call(args.pageAccessToken, `/${args.commentId}/private_replies`, { message: args.text });
+}
+
+export async function sendPublicReplyToComment(args: {
+  pageAccessToken: string;
+  commentId: string;
+  text: string;
+}) {
+  return call<{ id: string }>(args.pageAccessToken, `/${encodeURIComponent(args.commentId)}/replies`, { message: args.text });
 }
 
 export type MeProfile = { id: string; user_id?: string; username?: string };

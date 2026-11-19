@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
+  inserts: [] as Record<string, unknown>[],
   updates: [] as { table: string; payload: Record<string, unknown>; eq: [string, unknown][] }[],
   deletes: [] as { table: string; eq: [string, unknown][] }[],
   revalidated: [] as string[],
@@ -27,6 +28,12 @@ vi.mock('@/lib/db/client', () => ({
     from: (table: string) => {
       const eq: [string, unknown][] = [];
       const builder: any = {
+        insert: (payload: Record<string, unknown>) => {
+          state.inserts.push(payload);
+          return builder;
+        },
+        select: () => builder,
+        single: async () => ({ data: { id: 'flow-1' } }),
         update: (payload: Record<string, unknown>) => {
           state.updates.push({ table, payload, eq });
           return builder;
@@ -48,7 +55,8 @@ vi.mock('@/lib/db/client', () => ({
   }),
 }));
 
-import { saveFlowBuilderSteps, saveFlowSettings, setFlowArchived } from '@/app/admin/(gated)/flows/actions';
+import { createFlow, saveFlowBuilderSteps, saveFlowSettings, setFlowArchived } from '@/app/admin/(gated)/flows/actions';
+import { readPublicReplyOptions } from '@/lib/flow-engine/public-replies';
 
 function settingsForm(values: Record<string, string>) {
   const form = new FormData();
@@ -57,6 +65,7 @@ function settingsForm(values: Record<string, string>) {
 }
 
 beforeEach(() => {
+  state.inserts = [];
   state.updates = [];
   state.deletes = [];
   state.revalidated = [];
@@ -64,6 +73,46 @@ beforeEach(() => {
 });
 
 describe('flow admin actions', () => {
+  it.each([['comment', true], ['dm', false], ['story_reply', false]])(
+    'sets the public reply default on creation for %s',
+    async (triggerType, enabled) => {
+      await createFlow(settingsForm({ name: 'New flow', trigger_type: triggerType }));
+      expect(state.inserts[0]).toMatchObject({ trigger_type: triggerType, public_reply_enabled: enabled });
+    },
+  );
+
+  it('saves ordered reply options and recalculates the final percentage even with replies disabled', async () => {
+    const form = settingsForm({ name: 'Flow', language: 'tr', trigger_type: 'comment', trigger_keywords: 'hello' });
+    form.append('public_reply_text', '  First  ');
+    form.append('public_reply_text', 'Second');
+    form.append('public_reply_probability', '70');
+
+    expect(await saveFlowSettings('flow-1', form)).toEqual({ ok: true });
+    expect(state.updates[0].payload.public_reply_enabled).toBe(false);
+    expect(readPublicReplyOptions(state.updates[0].payload.public_reply_options)).toEqual([
+      { text: 'First', probability: 70 },
+      { text: 'Second', probability: 30 },
+    ]);
+    expect(state.revalidated).toContain('/admin/flows/flow-1');
+  });
+
+  it.each([
+    ['   ', ['70'], 'Enter text'],
+    ['Third', ['70', '50'], 'more than 100%'],
+    ['Third', ['70', '2.5'], 'whole probabilities'],
+    ['Third', ['70', ''], 'whole probabilities'],
+  ] as const)('rejects invalid public reply settings', async (lastText, probabilities, error) => {
+    const form = settingsForm({ name: 'Flow', language: 'tr', trigger_type: 'comment', trigger_keywords: 'hello', public_reply_enabled: 'on' });
+    for (const probability of probabilities) {
+      form.append('public_reply_text', 'Reply');
+      form.append('public_reply_probability', probability);
+    }
+    form.append('public_reply_text', lastText);
+
+    expect(await saveFlowSettings('flow-1', form)).toEqual({ ok: false, error: expect.stringContaining(error) });
+    expect(state.updates).toEqual([]);
+  });
+
   it('archives a flow without deleting post attachments', async () => {
     await setFlowArchived('flow-1', true);
 

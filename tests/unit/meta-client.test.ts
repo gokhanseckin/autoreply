@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { sendText, sendButtons, getMe, subscribeToAppWebhooks } from '@/lib/meta/client';
+import { sendText, sendButtons, sendPublicReplyToComment, getMe, subscribeToAppWebhooks } from '@/lib/meta/client';
 
 const fetchMock = vi.fn();
 
@@ -97,6 +97,19 @@ describe('getMe', () => {
       text: async () => '{"error":{"code":190,"type":"OAuthException","message":"bad token"}}',
     });
     await expect(getMe('BAD')).rejects.toThrow(/bad token/);
+  });
+});
+
+describe('sendPublicReplyToComment', () => {
+  it('posts the reply text to the comment and returns the new comment ID', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, text: async () => '{"id":"REPLY_1"}' });
+    const result = await sendPublicReplyToComment({ pageAccessToken: 'TOKEN', commentId: 'CMT_1', text: 'DM sent' });
+
+    expect(result.id).toBe('REPLY_1');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(new URL(url).pathname).toBe('/v23.0/CMT_1/replies');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({ message: 'DM sent' });
   });
 });
 

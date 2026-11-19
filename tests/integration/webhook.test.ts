@@ -8,6 +8,8 @@ import storyComment from '../fixtures/meta/story_comment.json';
 import { findCommentFlow, findDmFlow, findStoryReplyFlow } from '@/lib/flow-engine/routing';
 import { claimInboundMessage, findIgAccountByBusinessId, loadConversationState, logMessage, saveConversationState } from '@/lib/db/queries';
 import { captureEmail } from '@/lib/flow-engine/email-step';
+import { sendButtons, sendPrivateReplyToComment, sendPublicReplyToComment, sendText } from '@/lib/meta/client';
+import type { FlowStep } from '@/lib/flow-engine/schema';
 
 const dbState = vi.hoisted(() => ({
   flow: null as any,
@@ -37,6 +39,7 @@ vi.mock('@/lib/meta/client', () => ({
   sendText: vi.fn().mockResolvedValue({ message_id: 'm' }),
   sendButtons: vi.fn().mockResolvedValue({ message_id: 'm' }),
   sendPrivateReplyToComment: vi.fn().mockResolvedValue({ message_id: 'm' }),
+  sendPublicReplyToComment: vi.fn().mockResolvedValue({ id: 'public-1' }),
 }));
 vi.mock('@/lib/links/shorten', () => ({ generateLinkCode: vi.fn(() => 'CODE') }));
 vi.mock('@/lib/db/client', () => ({
@@ -83,6 +86,28 @@ function signed(body: string) {
   });
 }
 
+function enablePublicReplies(steps: FlowStep[] = [{ id: 's1', type: 'send_message', text: 'Hi' }]) {
+  vi.mocked(findCommentFlow).mockResolvedValue({
+    id: 'f1',
+    ig_account_id: 'a1',
+    name: 'Post comment flow',
+    archived: false,
+    trigger_type: 'comment',
+    trigger_keywords: ['FREE'],
+    language: 'en',
+    email_capture_enabled: false,
+    email_provider: 'none',
+    created_at: '2026-11-18T00:00:00.000Z',
+    updated_at: '2026-11-18T00:00:00.000Z',
+    steps,
+    public_reply_enabled: true,
+    public_reply_options: [
+      { text: 'Never', probability: 0 },
+      { text: 'DM sent', probability: 100 },
+    ],
+  });
+}
+
 describe('POST /api/webhooks/meta', () => {
   it('rejects bad signature with 401', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -101,6 +126,7 @@ describe('POST /api/webhooks/meta', () => {
     const { sendPrivateReplyToComment, sendText } = await import('@/lib/meta/client');
     expect(sendPrivateReplyToComment).toHaveBeenCalled();
     expect(sendText).not.toHaveBeenCalled();
+    expect(sendPublicReplyToComment).not.toHaveBeenCalled();
     expect(saveConversationState).toHaveBeenCalledWith(expect.objectContaining({
       current_flow_id: null,
       current_step_id: null,
@@ -108,8 +134,104 @@ describe('POST /api/webhooks/meta', () => {
     }));
   });
 
+  it('replies publicly once after the opening private reply in a multi-message flow', async () => {
+    enablePublicReplies([
+      { id: 's1', type: 'send_message', text: 'Hi', next_id: 's2' },
+      { id: 's2', type: 'send_message', text: 'More info' },
+    ]);
+
+    const res = await POST(signed(JSON.stringify(comment)));
+
+    expect(res.status).toBe(200);
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: 'More info', commentId: undefined }));
+    expect(sendPublicReplyToComment).toHaveBeenCalledExactlyOnceWith({
+      pageAccessToken: 'TOKEN', commentId: '18000000000000000', text: 'DM sent',
+    });
+    expect(vi.mocked(sendPrivateReplyToComment).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(sendPublicReplyToComment).mock.invocationCallOrder[0]);
+    expect(logMessage).toHaveBeenCalledWith(expect.objectContaining({
+      message_type: 'public_reply', meta_message_id: 'public-1', direction: 'out',
+    }));
+  });
+
+  it('replies publicly after a comment-addressed button DM on a reel', async () => {
+    enablePublicReplies([
+      { id: 's1', type: 'send_message', text: 'Hi', buttons: [{ label: 'Continue', action: { type: 'end' } }] },
+    ]);
+    const reelComment = structuredClone(comment);
+    Object.assign(reelComment.entry[0].changes[0].value.media, { media_product_type: 'REELS' });
+
+    await POST(signed(JSON.stringify(reelComment)));
+
+    expect(sendButtons).toHaveBeenCalledWith(expect.objectContaining({ commentId: '18000000000000000' }));
+    expect(sendPublicReplyToComment).toHaveBeenCalledTimes(1);
+    expect(saveConversationState).toHaveBeenCalledWith(expect.objectContaining({
+      current_step_id: 's1', awaiting_input_type: 'button',
+    }));
+  });
+
+  it('does not reply publicly if Instagram rejects the opening DM', async () => {
+    enablePublicReplies();
+    vi.mocked(sendPrivateReplyToComment).mockRejectedValueOnce(new Error('DM failed'));
+
+    await POST(signed(JSON.stringify(comment)));
+
+    expect(sendPublicReplyToComment).not.toHaveBeenCalled();
+  });
+
+  it('does not reply publicly if the flow sends no DM', async () => {
+    enablePublicReplies([{ id: 's1', type: 'end' }]);
+
+    await POST(signed(JSON.stringify(comment)));
+
+    expect(sendPublicReplyToComment).not.toHaveBeenCalled();
+  });
+
+  it('sends at most one public reply when webhook deliveries compete for the comment claim', async () => {
+    enablePublicReplies();
+    vi.mocked(claimInboundMessage).mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+
+    await Promise.all([POST(signed(JSON.stringify(comment))), POST(signed(JSON.stringify(comment)))]);
+
+    expect(sendPrivateReplyToComment).toHaveBeenCalledTimes(1);
+    expect(sendPublicReplyToComment).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['entry ID', 'self-scoped ID'])('skips comments written by the connected account using %s', async (identity) => {
+    enablePublicReplies();
+    const ownComment = structuredClone(comment);
+    const author = ownComment.entry[0].changes[0].value.from;
+    if (identity === 'entry ID') author.id = ownComment.entry[0].id;
+    else Object.assign(author, { self_ig_scoped_id: 'self-scoped-id' });
+
+    await POST(signed(JSON.stringify(ownComment)));
+
+    expect(findCommentFlow).not.toHaveBeenCalled();
+    expect(claimInboundMessage).not.toHaveBeenCalled();
+    expect(sendPrivateReplyToComment).not.toHaveBeenCalled();
+    expect(sendPublicReplyToComment).not.toHaveBeenCalled();
+  });
+
+  it('records public reply failure and preserves conversation progress', async () => {
+    enablePublicReplies([
+      { id: 's1', type: 'send_message', text: 'Hi', next_id: 's2' },
+      { id: 's2', type: 'wait_for_text', on_match_next_id: 's3', on_miss: 'end', max_retries: 0 },
+      { id: 's3', type: 'end' },
+    ]);
+    vi.mocked(sendPublicReplyToComment).mockRejectedValueOnce(new Error('Missing comment permission'));
+
+    await POST(signed(JSON.stringify(comment)));
+
+    expect(logMessage).toHaveBeenCalledWith(expect.objectContaining({
+      message_type: 'public_reply', error: { message: 'Missing comment permission' },
+    }));
+    expect(saveConversationState).toHaveBeenCalledWith(expect.objectContaining({
+      current_step_id: 's2', awaiting_input_type: 'text',
+    }));
+  });
+
   it('runs a public story comment through the story-reply flow as a DM addressed to the comment', async () => {
-    vi.mocked(findStoryReplyFlow).mockResolvedValue({ id: 'story-flow', language: 'en', steps: [{ id: 's1', type: 'send_message', text: 'Story comment matched' }] } as any);
+    vi.mocked(findStoryReplyFlow).mockResolvedValue({ id: 'story-flow', language: 'en', public_reply_enabled: true, steps: [{ id: 's1', type: 'send_message', text: 'Story comment matched' }] } as any);
 
     const res = await POST(signed(JSON.stringify(storyComment)));
 
@@ -120,6 +242,7 @@ describe('POST /api/webhooks/meta', () => {
     // First (and only) message is addressed to the comment so it lands in DMs.
     expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ commentId: '18000000000000001', text: expect.stringContaining('Story comment matched') }));
     expect(sendPrivateReplyToComment).not.toHaveBeenCalled();
+    expect(sendPublicReplyToComment).not.toHaveBeenCalled();
   });
 
   it('runs a direct-entry story comment payload through the story-reply flow', async () => {
